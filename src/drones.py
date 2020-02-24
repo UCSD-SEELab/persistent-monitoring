@@ -21,6 +21,10 @@ from shapely.ops import unary_union, split, cascaded_union, snap, linemerge
 from shapely.affinity import translate
 import shapely
 
+# Saving out errors
+from datetime import datetime
+import pickle as pkl
+
 from functools import partial
 
 # SymPy used for generating functions to solve for Ostertag Greedy KF 
@@ -294,6 +298,12 @@ class Drone_Base():
         s_v = s_funcs[3](t_mod)
         s_a = s_funcs[4](t_mod)
         s_j = s_funcs[5](t_mod)
+
+        if any(s_p != s_p):
+            filename = datetime.now().strftime('traj_error_%Y%m%d_%H%M%S.pkl')
+            print(' traj_error. Saving pickle file ({0})'.format(filename))
+            pkl.dump({'s_funcs':s_funcs, 't':t, 't_mod':t_mod, 's_p':s_p, 's_v':s_v, 's_a':s_a, 's_j':s_j},
+                     open(filename, 'wb'))
 
         return s_p, s_v, s_a, s_j
 
@@ -1399,6 +1409,7 @@ class Drone_Ostertag2020(Drone_Base):
         arr_c_best = np.zeros((2,2))
         m_best = m
         dt_best = T_min / m
+        ind_t_best = -1
 
         # Initial
         arr_t[0] = T_min
@@ -1482,17 +1493,22 @@ class Drone_Ostertag2020(Drone_Base):
             """
 
             if barr_solverfailed[ind]:
-                arr_t[ind+1] = t * smallstep
-                barr_smallstep[ind+1] = 1
-                print('    solver failed. small step to t = {0:0.3f}'.format(arr_t[ind+1]))
-
+                if b_forward:
+                    arr_t[ind+1] = t * smallstep
+                    barr_smallstep[ind+1] = 1
+                    print('    solver failed. small step to t = {0:0.3f}'.format(arr_t[ind+1]))
+                elif not(b_forward):
+                    print('    solver failed. use previous best of t = {0:0.3f}'.format(arr_t[ind_t_best]))
+                    break
             else:
                 if slack_max <= stop_gammatol:
                     # Begin back search
                     # TODO Make smarter back search
-                    arr_c_best = prob_vars['c'].value
-                    m_best = m
-                    dt_best = t / m
+                    if (ind_t_best == -1) or (arr_t[ind_t_best] > t):
+                        ind_t_best = ind
+                        arr_c_best = prob_vars['c'].value
+                        m_best = m
+                        dt_best = t / m
 
                     barr_valid[ind] = 1
                     b_forward = False
@@ -1505,7 +1521,7 @@ class Drone_Ostertag2020(Drone_Base):
                         print('    result valid. back step to t = {0:0.3f}'.format(arr_t[ind+1]))
                 else:
                     if not(b_forward):
-                        print('    better result already found.')
+                        print('    result invalid. use previous best of t = {0:0.3f}'.format(arr_t[ind_t_best]))
                         break
                     if barr_smallstep[ind]:
                         # Do big step
@@ -1546,7 +1562,7 @@ class Drone_Ostertag2020(Drone_Base):
 
         return arr_T, T_notobs
 
-    def calc_control_points(self, arr_T_min):
+    def calc_control_points(self, arr_T_min, b_calc=None):
         """
         Calculates control points and knots for a B-spline representation of a trajectory
         """
@@ -1560,7 +1576,6 @@ class Drone_Ostertag2020(Drone_Base):
         for ind_curr in range(len(self.list_q)):
             T_min = arr_T_min[ind_curr]
 
-            # Calculate B-spline control points (pos, vel, acc, jer) for trajectory in region B
             ind_prev = ind_curr - 1
             ind_next = (ind_curr + 1) % len(self.list_q)
 
@@ -1571,24 +1586,32 @@ class Drone_Ostertag2020(Drone_Base):
             print('\nPOI {0:03d} at ({1:3.1f}, {2:3.1f})'.format(ind_curr, pos_curr[0], pos_curr[1]))
             print('  T_min: {0}'.format(T_min))
 
-            pos_din = pos_curr - pos_prev
-            pos_dout = pos_next - pos_curr
+            if not(b_calc is None) and not(b_calc[ind_curr]):
+                # If control points are valid from previous calculation, then do not recalculate
+                list_traj.append(self.list_traj[2*ind_curr])     # bspline
+                list_traj.append(self.list_traj[2*ind_curr + 1]) # linear
+                print('  No change from previous iteration. Reusing trajectory.')
+            else:
+                print('  Change from previous iteration. Recalculating.')
+                # Calculate B-spline control points (pos, vel, acc, jer) for trajectory in region B
+                pos_din = pos_curr - pos_prev
+                pos_dout = pos_next - pos_curr
 
-            theta_in = np.arctan2(-pos_din[1], -pos_din[0])
-            theta_out = np.arctan2(pos_dout[1], pos_dout[0])
-            pos_in = pos_curr + np.array([np.cos(theta_in), np.sin(theta_in)]) * self.obs_rad
-            pos_out = pos_curr + np.array([np.cos(theta_out), np.sin(theta_out)]) * self.obs_rad
+                theta_in = np.arctan2(-pos_din[1], -pos_din[0])
+                theta_out = np.arctan2(pos_dout[1], pos_dout[0])
+                pos_in = pos_curr + np.array([np.cos(theta_in), np.sin(theta_in)]) * self.obs_rad
+                pos_out = pos_curr + np.array([np.cos(theta_out), np.sin(theta_out)]) * self.obs_rad
 
-            v_in = self.vmax * pos_din / np.sum(pos_din ** 2) ** 0.5
-            v_out = self.vmax * pos_dout / np.sum(pos_dout ** 2) ** 0.5
-            c_p, m, dt = self.opt_bst(q_pos=pos_curr, p_in=pos_in, p_out=pos_out, v_in=v_in, v_out=v_out, T_min=T_min)
-            c_v, c_a, c_j = calc_ctrl_deriv(c_p, dt)
-            list_traj.append({'type':'bspline', 'c_p':c_p, 'c_v':c_v, 'c_a':c_a, 'c_j':c_j, 'm':m, 'dt':dt,
-                              'T_min':T_min, 'T':m*dt})
+                v_in = self.vmax * pos_din / np.sum(pos_din ** 2) ** 0.5
+                v_out = self.vmax * pos_dout / np.sum(pos_dout ** 2) ** 0.5
+                c_p, m, dt = self.opt_bst(q_pos=pos_curr, p_in=pos_in, p_out=pos_out, v_in=v_in, v_out=v_out, T_min=T_min)
+                c_v, c_a, c_j = calc_ctrl_deriv(c_p, dt)
+                list_traj.append({'type':'bspline', 'c_p':c_p, 'c_v':c_v, 'c_a':c_a, 'c_j':c_j, 'm':m, 'dt':dt,
+                                  'T_min':T_min, 'T':m*dt})
 
-            pos_in_next = pos_next - np.array([np.cos(theta_out), np.sin(theta_out)]) * self.obs_rad
-            t_to_next = np.sum((pos_in_next - pos_out) ** 2) ** 0.5 / self.vmax
-            list_traj.append({'type':'linear', 'p1': pos_out, 'p2': pos_in_next, 'v':self.vmax, 'T':t_to_next})
+                pos_in_next = pos_next - np.array([np.cos(theta_out), np.sin(theta_out)]) * self.obs_rad
+                t_to_next = np.sum((pos_in_next - pos_out) ** 2) ** 0.5 / self.vmax
+                list_traj.append({'type':'linear', 'p1': pos_out, 'p2': pos_in_next, 'v':self.vmax, 'T':t_to_next})
 
         return list_traj
 
@@ -1621,10 +1644,12 @@ class Drone_Ostertag2020(Drone_Base):
 
         # Greedy Knockdown to calculate optimal number of observations
         self.list_d = self.greedy_knockdown_algorithm(arr_T_obs, T_notobs)
-        list_d_prev = np.zeros(self.list_d.shape)
+        list_d_prev = np.ones(self.list_d.shape)
         while not(all(self.list_d == list_d_prev)):
+            # Determine which points have had a changed number of observations
+            arr_b_recalc = np.logical_not(self.list_d == list_d_prev)
             list_d_prev = self.list_d[:]
-            self.list_traj = self.calc_control_points(list_d_prev / self.fs)
+            self.list_traj = self.calc_control_points(list_d_prev / self.fs, b_calc=arr_b_recalc)
             arr_T_obs, T_notobs = self.split_T_obs(self.list_traj)
             self.list_d = self.greedy_knockdown_algorithm(arr_T_obs, T_notobs)
 
@@ -1663,7 +1688,9 @@ class Drone_Ostertag2020(Drone_Base):
                 c_a = traj_seg['c_a']
                 c_j = traj_seg['c_j']
 
-                tau = np.arange(-k / self.fu, (m + k + 1 + 1) / self.fu, 1 / self.fu)[0:m + 2 * k + 1 + 1] + t1
+                dt = traj_seg['dt']
+
+                tau = np.arange(-k * dt, (m + k + 1 + 1) * dt, dt)[0:m + 2 * k + 1 + 1] + t1
                 # NOTE: Additional "+ 1" at stopping point is required to generate knot exactly at (M + k_test + 1)
                 tau_p = tau
                 tau_v = tau[:-1]
