@@ -53,14 +53,14 @@ def generate_func_kfsteadystate(depth=10):
         # time_start = time.time()
         # print('Depth {0}'.format(num_obs))
         if (num_obs > 1):
-            expr = sympy.Eq(list_lambda[0], list_lambda[num_obs-1] + Twc*W - \
+            expr = sympy.Eq(list_lambda[0], list_lambda[num_obs-1] + (Twc - num_obs)*W - \
                             list_lambda[num_obs-1]**2 / (list_lambda[num_obs-1] + V))
             for k in range(num_obs-1, 0, -1):
                 expr = expr.subs(list_lambda[k], 
                                  list_lambda[k-1] + W - list_lambda[k-1]**2 / \
                                  (list_lambda[k-1] + V))
         else:
-           expr = sympy.Eq(list_lambda[0], list_lambda[0] + Twc*W - \
+           expr = sympy.Eq(list_lambda[0], list_lambda[0] + (Twc - num_obs)*W - \
                            list_lambda[0]**2 / (list_lambda[0] + V))
 
         list_func.append(expr)
@@ -118,9 +118,9 @@ class Drone_Base():
     Base class for drones that holds all basic functionality
     """
     DEFAULT_VMAX = 10
-    DEFAULT_AMAX = 30
-    DEFAULT_JMAX = 100
-    DEFAULT_COVAR_OBS = 10
+    DEFAULT_AMAX = 100
+    DEFAULT_JMAX = 400
+    DEFAULT_COVAR_OBS = 40
     DEFAULT_FS = 1
 
     THETA = np.linspace(0, 2*np.pi, 20)
@@ -1251,11 +1251,11 @@ class Drone_Ostertag2020(Drone_Base):
             """
             J += gamma_gamma
 
-            # J += 0.001 * gamma_a + 0.001 * gamma_j
+            J += 0.001 * gamma_a + 0.001 * gamma_j
 
-            for ind_dim in range(dim_valid):
-                # J += (1 / param_dtau)**(2*K_CONST - 1) * cvxpy.quad_form(c[:, ind_dim], A) # Equivalent to c_dim.T @ A @ c_dim
-                J += 1 * cvxpy.quad_form(c[:, ind_dim], A)
+            # for ind_dim in range(dim_valid):
+            #     # J += (1 / param_dtau)**(2*K_CONST - 1) * cvxpy.quad_form(c[:, ind_dim], A) # Equivalent to c_dim.T @ A @ c_dim
+            #     J += 1 * cvxpy.quad_form(c[:, ind_dim], A)
 
         else:
             for ind_dim in range(dim_valid):
@@ -1363,6 +1363,12 @@ class Drone_Ostertag2020(Drone_Base):
         """
         Optimization to find minimum time, feasible B-spline path for a single segment
         """
+        print('q_pos = {0}'.format(q_pos))
+        print('p_in = {0}'.format(p_in))
+        print('p_out = {0}'.format(p_out))
+        print('v_in = {0}'.format(v_in))
+        print('v_out = {0}'.format(v_out))
+
         dim_valid = min([q_pos.shape[-1], p_in.shape[-1], p_out.shape[-1], v_in.shape[-1], v_out.shape[-1]])
         m = np.floor(T_min * self.fu).astype(int)
 
@@ -1376,9 +1382,32 @@ class Drone_Ostertag2020(Drone_Base):
         prob_params['jmax'].value = self.jmax
 
         # TODO Implement more intelligent search method
-        t = T_min
-        while (True):
-            # Set time
+        stop_gammatol = 0.01
+        stop_ttol = 0.05
+        maxiter = 20
+        smallstep = 1.05
+        backstep = 1 / (smallstep)**(1/5)
+        barr_valid = np.zeros(maxiter)
+        barr_smallstep = np.ones(maxiter)
+        barr_solverfailed = np.zeros(maxiter)
+        arr_t = np.zeros(maxiter)
+        arr_gamma = np.zeros(maxiter)
+        arr_gamma_v = np.zeros(maxiter)
+        arr_gamma_a = np.zeros(maxiter)
+        arr_gamma_j = np.zeros(maxiter)
+        b_forward = True
+        arr_c_best = np.zeros((2,2))
+        m_best = m
+        dt_best = T_min / m
+
+        # Initial
+        arr_t[0] = T_min
+        barr_smallstep[0] = 0
+
+        for ind in range(0, maxiter-1):
+            t = arr_t[ind]
+
+            # Set knot spacing parameters
             dt = t / m
             prob_params['dtau'].value = dt
 
@@ -1394,35 +1423,111 @@ class Drone_Ostertag2020(Drone_Base):
                 print('  t:  {0:0.4f}'.format(t))
                 print('  m:   {0:d}'.format(m))
                 print('  dt:  {0:0.4f}'.format(dt))
-
             try:
                 trun_start = time.process_time()
-                opt_prob.solve(solver=cvxpy.MOSEK)  #, verbose=True) # if issue
+                opt_prob.solve(solver=cvxpy.MOSEK) #, verbose=True) # if issue
                 trun_end = time.process_time()
                 if self.b_verbose:
                     print('  proc: {0:0.2f} ms'.format(1000*(trun_end - trun_start)))
             except:
+                barr_solverfailed[ind] = 1
                 print('  Solver failed')
-                continue
 
-            if (opt_prob.status == 'optimal') and self.b_verbose:
-                print('  ovr: {0:0.4f}'.format(np.sign(prob_vars['gamma'].value)*np.sqrt(np.abs(prob_vars['gamma'].value))))
-                print('  vel: {0:0.4f}'.format(np.sign(prob_vars['gamma_v'].value)*np.sqrt(np.abs(prob_vars['gamma_v'].value))))
-                print('  acc: {0:0.4f}'.format(np.sign(prob_vars['gamma_a'].value)*np.sqrt(np.abs(prob_vars['gamma_a'].value))))
-                print('  jer: {0:0.4f}'.format(np.sign(prob_vars['gamma_j'].value)*np.sqrt(np.abs(prob_vars['gamma_j'].value))))
-            elif self.b_verbose:
-                print('  Optimization did not converge')
-                debug_data, debug_chain, debug_invdata = opt_prob.get_problem_data(cvxpy.MOSEK)
-                print('  Status: ', opt_prob.status)
+            if not(barr_solverfailed[ind]):
+                slack_max = np.sign(prob_vars['gamma'].value)*np.sqrt(np.abs(prob_vars['gamma'].value))
+                slack_v = np.sign(prob_vars['gamma_v'].value)*np.sqrt(np.abs(prob_vars['gamma_v'].value))
+                slack_a = np.sign(prob_vars['gamma_a'].value)*np.sqrt(np.abs(prob_vars['gamma_a'].value))
+                slack_j = np.sign(prob_vars['gamma_j'].value)*np.sqrt(np.abs(prob_vars['gamma_j'].value))
+                arr_gamma[ind] = slack_max
+                arr_gamma_v[ind] = slack_v
+                arr_gamma_a[ind] = slack_a
+                arr_gamma_j[ind] = slack_j
 
-            # TODO Add adjustment of t and break when appropriate
-            break
+                if (opt_prob.status == 'optimal'):
+                    print('  ovr: {0:0.4f}'.format(slack_max))
+                    print('  vel: {0:0.4f}'.format(slack_v))
+                    print('  acc: {0:0.4f}'.format(slack_a))
+                    print('  jer: {0:0.4f}'.format(slack_j))
+                else:
+                    barr_solverfailed[ind] = 1
+                    print('  Optimization did not converge')
+                    debug_data, debug_chain, debug_invdata = opt_prob.get_problem_data(cvxpy.MOSEK)
+                    print('  Status: ', opt_prob.status)
 
-        arr_c = np.array(prob_vars['c'].value)
-        m = m
-        dt = prob_params['dtau'].value
+            # Adjust t based on little-big jumps
+            # Little jumps are used to approximate derivative, big jump uses the derivative to explore larger space
 
-        return arr_c, m, dt
+            """
+            if big jump
+                if invalid
+                    set up small jump
+                if valid
+                    set up back search
+            if small jump
+                if invalid
+                    set up big jump
+                if valid
+                    set up back search
+                    
+            if invalid
+                if big jump,
+                    set up small jump
+                else
+                    set up big jump
+            else
+                set up back search
+                
+            if solver failed
+                try again with small jump
+            """
+
+            if barr_solverfailed[ind]:
+                arr_t[ind+1] = t * smallstep
+                barr_smallstep[ind+1] = 1
+                print('    solver failed. small step to t = {0:0.3f}'.format(arr_t[ind+1]))
+
+            else:
+                if slack_max <= stop_gammatol:
+                    # Begin back search
+                    # TODO Make smarter back search
+                    arr_c_best = prob_vars['c'].value
+                    m_best = m
+                    dt_best = t / m
+
+                    barr_valid[ind] = 1
+                    b_forward = False
+
+                    if t == T_min:
+                        print('    result valid. t = T_min = {0:0.3f}'.format(arr_t[ind]))
+                        break
+                    else:
+                        arr_t[ind+1] = t * backstep
+                        print('    result valid. back step to t = {0:0.3f}'.format(arr_t[ind+1]))
+                else:
+                    if not(b_forward):
+                        print('    better result already found.')
+                        break
+                    if barr_smallstep[ind]:
+                        # Do big step
+                        ind_prev = np.max(np.where(np.logical_and(np.logical_not(barr_smallstep), np.logical_not(barr_solverfailed))))
+                        t_prev = arr_t[ind_prev]
+                        t_curr = arr_t[ind]
+                        val_prev = arr_gamma[ind_prev]
+                        val_curr = arr_gamma[ind]
+                        val_slope = (val_curr - val_prev) / (t_curr - t_prev)
+                        t_int = t_curr - val_curr / val_slope
+                        arr_t[ind+1] = t_int
+                        barr_smallstep[ind+1] = 0
+                        print('    result invalid. big step to t = {0:0.3f}'.format(arr_t[ind+1]))
+
+                        # TODO Adjust problem formulation by increasing m?
+                    else:
+                        # Do small step
+                        arr_t[ind+1] = t * smallstep
+                        barr_smallstep[ind+1] = 1
+                        print('    result invalid. small step to t = {0:0.3f}'.format(arr_t[ind+1]))
+
+        return arr_c_best, m_best, dt_best
 
     def split_T_obs(self, list_traj):
         """

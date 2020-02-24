@@ -83,7 +83,7 @@ class Model_Base():
 
         self.list_q = np.append(x, y, axis=1)
 
-        self.covar_env = np.diag(5 + 2.5*np.cos( theta[:-1] ))
+        self.covar_env = np.diag(5 + 2.5*np.cos( theta[:-1] )) / 10
 
     def get_map_terrain(self):
         """

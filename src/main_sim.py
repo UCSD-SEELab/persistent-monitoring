@@ -174,13 +174,14 @@ class SwarmController():
         Adds a drone specified by drone_type, which should be a drone model that conforms to the standard in drones.py.
         cfg is a dictionary that holds the configuration of the drone for all required parameters by the class.
         """
-        try:
-            temp_drone = drone_type(drone_id=drone_id, b_verbose=b_verbose, b_logging=b_logging, **cfg)
-            self.list_drones.append(temp_drone)
-            print('Drone ({0}) added to swarm_controller'.format(drone_type.__name__))
-        except:
+        # try:
+        temp_drone = drone_type(drone_id=drone_id, b_verbose=b_verbose, b_logging=b_logging, **cfg)
+        self.list_drones.append(temp_drone)
+        print('Drone ({0}) added to swarm_controller'.format(drone_type.__name__))
+        """except:
             print(sys.exc_info())
             print('Drone ({0}) failed to be created with parameters {1}'.format(drone_type.__name__, cfg))
+        """
 
     def init_sim(self):
         """
@@ -319,14 +320,14 @@ if __name__ == '__main__':
         swarm_controller = SwarmController(env_model=env_model, b_verbose=b_verbose, b_logging=b_logging)
         sim_env.set_swarm_controller(swarm_controller)
         swarm_controller.add_drone(drone_type=Drone_Constant, drone_id='Drone1', b_verbose=b_verbose, b_logging=b_logging,
-                                   cfg={'env_model': env_model, 'vmax':25})
+                                   cfg={'env_model': env_model, 'vmax':25, 'fs':2})
         swarm_controller.add_drone(drone_type=Drone_Ostertag2020, drone_id='Drone2', b_verbose=b_verbose, b_logging=b_logging,
-                                   cfg={'env_model': env_model, 'vmax':25})
+                                   cfg={'env_model': env_model, 'vmax':25, 'fs':2})
 
         # Everything is connected, initialize
         sim_env.init_sim()
 
-        for ind in range(100):
+        for ind in range(1000):
             sim_env.update()
 
             # Update visualization
