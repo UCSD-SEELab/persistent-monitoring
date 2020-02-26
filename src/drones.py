@@ -732,7 +732,7 @@ class Drone_Smith2012(Drone_Base):
                 X[ind_i, ind_j] = X_growth - X_decay
 
         # Set up optimization problem
-        prob_statement = pulp.LpProblem('Smith 2012', pulp.LpMinimize)
+        prob_statement = pulp.LpProblem('Smith2012', pulp.LpMinimize)
 
         # Create variables
         list_alphavar = [pulp.LpVariable('a{0:03d}'.format(i), lowBound=(1 / self.vmax),
@@ -892,10 +892,218 @@ class Drone_Smith2012(Drone_Base):
         return arr_beta_p
 
 
+####################
+class Drone_Smith2012_Regions(Drone_Smith2012):
+    """
+    Drone that flies with a velocity controller as proposed in Smith (2012)
+        Smith SL, Schwager M, Rus D. Persistent robotic tasks: Monitoring and sweeping in changing environments. IEEE
+        Transactions on Robotics. 2012 Apr;28(2):410-26.
+
+    Algorithm is modified to separate trajectory into bases that are perfectly aligned with regions of interest
+    """
+    def __init__(self, drone_id, env_model=None, b_verbose=True, b_logging=True, **cfg):
+        """
+        Initialze a drone that
+        """
+        self.list_kf_eqs = None
+
+        super(Drone_Smith2012_Regions, self).__init__(drone_id=drone_id, env_model=env_model,
+                                              b_logging=b_logging, b_verbose=b_verbose,
+                                              **cfg)
+
+        self.drone_desc = 'Drone with stability margin maximizing, position-dependent controller from Smith (2012)'
+
+    def form_traj(self):
+        """
+        Calculates a optimal position-dependent velocity controller with J steps based on the methodology outlined in
+        Smith (2012)
+        1. Calculate point order using TSP
+        2. Solve for optimal number of observations based on linear approximation of uncertainty gain/loss
+        3. Calculate velocity for each segment
+        """
+        if not (self.env_model):
+            self.s_p = None
+            self.s_v = None
+            self.s_a = None
+            self.s_j = None
+            self.b_traj_ready = False
+            return
+
+        # Determine optimal ordering of points of interest
+        list_q = self.env_model.get_pois()
+        q_trans = self.calc_tsp_order(list_q)
+
+        self.list_q = q_trans @ list_q
+        self.covar_e = q_trans @ self.covar_e @ q_trans.T
+
+        # Growth in uncertainty is due to environmental noise
+        p = np.diag(self.covar_e)
+
+        # Decrease in uncertainty is from Kalman filter, which can only measure
+        # when q is within sensing range. The decrease at steady state can be
+        # approximated as the product of amount of time for 1 cycle of the loop
+        # and the growth of the point
+
+        # Calculate minimum time spent in each region and total time spent not observing any POI
+        arr_T_obs, T_notobs = self.split_T_obs()
+        T_obs = np.sum(np.max(np.append(arr_T_obs.reshape((-1, 1)), np.ones((self.N_q, 1)) / self.fs, axis=1), axis=1))
+        # Predicted time for single loop with 1 obs per location
+        T0 = T_obs + T_notobs
+        # First-order approximation of Kalman filter decrease, assuming error decreases in a single-sample
+        c = T0 * p * self.fs
+
+        # Create regional, rectangular basis functions (beta) and portion of betas from which a POI can be observed
+        self.L = self.calc_path_length(self.list_q)
+        arr_beta_edges = self.calc_aligned_beta_edges()
+        arr_dtheta_beta = self.calc_int_beta(arr_beta_edges)
+
+        # Calculate K as defined in Smith (2012) Eq. (8)
+        K = np.zeros((self.N_q, 2 * self.N_q))
+        for ind_i in range(self.N_q):
+            for ind_j in range(2 * self.N_q):
+                K[ind_i, ind_j] = arr_dtheta_beta[ind_i, ind_j] - p[ind_i] / c[ind_i] * np.sum(arr_dtheta_beta[:, ind_j])
+
+        # Calculate X as defined in Smith (2012) Eq. (19) using only a single continuous observation per loop
+        X = np.zeros((self.N_q, 2 * self.N_q))
+        for ind_i in range(self.N_q):
+            for ind_j in range(2 * self.N_q):
+                X_growth = p[ind_i] * np.sum(arr_dtheta_beta[:, ind_j])
+                X_decay = c[ind_i] * arr_dtheta_beta[ind_i, ind_j]
+                X[ind_i, ind_j] = X_growth - X_decay
+
+        # Set up optimization problem
+        prob_statement = pulp.LpProblem('Smith2012_Regions', pulp.LpMinimize)
+
+        # Create variables
+        list_alphavar = [pulp.LpVariable('a{0:03d}'.format(i), lowBound=(1 / self.vmax),
+                                         cat=pulp.LpContinuous) for i in range(2 * self.N_q)]
+        marginvar = pulp.LpVariable('B', lowBound=0, cat=pulp.LpContinuous)
+
+        # Add objective statement
+        prob_statement += (marginvar)
+
+        # Add constraints with X
+        for ind_X, X_row in enumerate(X):
+            prob_statement += pulp.LpConstraint((pulp.lpDot(X_row, list_alphavar) - marginvar),
+                                                sense=pulp.constants.LpConstraintLE,
+                                                name='X const{0}'.format(ind_X), rhs=0)
+
+        # Add constraints with K
+        for ind_K, K_row in enumerate(K):
+            prob_statement += pulp.LpConstraint((pulp.lpDot(K_row, list_alphavar)),
+                                                sense=pulp.constants.LpConstraintGE,
+                                                name='K const{0}'.format(ind_K), rhs=0)
+
+        # prob_statement.writeLP('SmithModel.lp')
+        prob_statement.solve()
+
+        arr_alpha = np.array([v.varValue for v in prob_statement.variables() if v.name != 'B']).flatten()
+
+        # Split first segment into first and last segments and roll positions back by 1/2 sensing region width
+        arr_beta_edges = arr_beta_edges - self.obs_rad
+        arr_beta_edges[0] = 0
+        arr_beta_edges = np.append(arr_beta_edges, arr_beta_edges[-1] + self.obs_rad)
+        arr_alpha = np.append(arr_alpha, arr_alpha[0])
+
+        arr_beta_p = self.calc_beta_pos(arr_beta_edges)
+
+        # Creative trajectory forming by splitting up the first ROI into first and last velocity regions
+        list_traj = []
+        # First point
+        p1 = arr_beta_p[0]
+        p2 = arr_beta_p[1]
+        alpha = arr_alpha[0]
+        T = np.sqrt(np.sum(np.power(p2 - p1, 2))) * alpha
+        list_traj.append({'type': 'linear', 'p1': p1, 'p2': p2, 'v': (1 / alpha), 'T': T})
+
+        # Middle points
+        for p1, p2, pq, p3, alpha1, alpha2 in zip(arr_beta_p[1:-3:2], arr_beta_p[2:-2:2],
+                                                  self.list_q[1:], arr_beta_p[3:-1:2],
+                                                  arr_alpha[1:-2:2], arr_alpha[2:-1:2]):
+            # Inter-point segment
+            T = np.sqrt(np.sum(np.power(p2 - p1, 2))) * alpha1
+            list_traj.append({'type': 'linear', 'p1': p1, 'p2': p2, 'v': (1 / alpha1), 'T': T})
+            # Inner-ROI segment 1
+            T = np.sqrt(np.sum(np.power(pq - p2, 2))) * alpha2
+            list_traj.append({'type': 'linear', 'p1': p2, 'p2': pq, 'v': (1 / alpha2), 'T': T})
+            # Inner-ROI segment 2
+            T = np.sqrt(np.sum(np.power(p3 - pq, 2))) * alpha2
+            list_traj.append({'type': 'linear', 'p1': pq, 'p2': p3, 'v': (1 / alpha2), 'T': T})
+
+        # Intersegment
+        p1 = arr_beta_p[-3]
+        p2 = arr_beta_p[-2]
+        alpha = arr_alpha[-2]
+        T = np.sqrt(np.sum(np.power(p2 - p1, 2))) * alpha
+        list_traj.append({'type': 'linear', 'p1': p1, 'p2': p2, 'v': (1 / alpha), 'T': T})
+
+        # Last point
+        p1 = arr_beta_p[-2]
+        p2 = arr_beta_p[-1]
+        alpha = arr_alpha[-1]
+        T = np.sqrt(np.sum(np.power(p2 - p1, 2))) * alpha
+        list_traj.append({'type': 'linear', 'p1': p1, 'p2': p2, 'v': (1 / alpha), 'T': T})
+
+        self.list_traj = list_traj
+        print('Smith 2012 v_controller solved ({0})'.format(pulp.LpStatus[prob_statement.status]))
+        print('  alpha  = ' + np.array2string(arr_alpha.flatten(), separator=', ',
+                                              formatter={'float_kind': lambda x: '{0:2.5f}'.format(x)},
+                                              max_line_width=2148))
+
+        self.create_s_function_map()
+
+        return self.calc_traj(0)
+
+    def calc_aligned_beta_edges(self):
+        """
+        Calculates the beta edges so that they perfectly align with regions of interest, starting at the entry to the
+        first region of interest
+        """
+        arr_beta_theta = np.zeros(self.N_q * 2 + 1)
+
+        # Iterate through POI to determine path in B and to the next POI
+        theta_start = 0
+
+        for ind_curr in range(len(self.list_q)):
+            theta_stop = (theta_start + 2 * self.obs_rad)
+
+            arr_beta_theta[2*ind_curr] = theta_start
+            arr_beta_theta[2*ind_curr + 1] = theta_stop
+
+            ind_next = (ind_curr + 1) % len(self.list_q)
+            pos_curr = self.list_q[ind_curr]
+            pos_next = self.list_q[ind_next]
+            theta_start += np.sqrt(np.sum(np.power(pos_next - pos_curr, 2)))
+
+        arr_beta_theta[-1] = self.L
+
+        return arr_beta_theta
+
+    def calc_int_beta(self, arr_beta_edges):
+        """
+        Calculates the length of path along each gamma segment where the beta edges perfectly align with regions of
+        interest
+        """
+        arr_dtheta_beta = np.zeros((self.N_q + 1, 2*self.N_q))
+
+        # Iterate through POI to determine path in B and to the next POI
+        theta = 0
+
+        for ind_curr in range(len(self.list_q)):
+            arr_dtheta_beta[ind_curr, 2 * ind_curr] = 2 * self.obs_rad
+
+            ind_next = (ind_curr + 1) % len(self.list_q)
+            pos_curr = self.list_q[ind_curr]
+            pos_next = self.list_q[ind_next]
+            arr_dtheta_beta[-1, 2 * ind_curr + 1] = np.sqrt(np.sum(np.power(pos_next - pos_curr, 2))) - 2 * self.obs_rad
+
+        return arr_dtheta_beta
+
+
 ####################       
 class Drone_Ostertag2019(Drone_Base):
     """
-    Drone that flies with a velocity controller as proposed in Ostertag (2018)
+    Drone that flies with a velocity controller as proposed in Ostertag (2019)
 
     Utilizes a greedy algorithm to find the optimal velocity controller that
     meets a minimium bound of the maximum steady state Kalman filter 
@@ -959,7 +1167,7 @@ class Drone_Ostertag2019(Drone_Base):
         arr_dtheta_beta = self.calc_int_beta(arr_beta_edges)
 
         # Set up optimization problem
-        prob_statement = pulp.LpProblem('Ostertag 2019', pulp.LpMinimize)
+        prob_statement = pulp.LpProblem('Ostertag2019', pulp.LpMinimize)
 
         # Create variables
         list_alphavar = [pulp.LpVariable('a{0:03d}'.format(i), lowBound=(1 / self.vmax),
@@ -1118,6 +1326,180 @@ class Drone_Ostertag2019(Drone_Base):
         """
         return self.covar_bound
 
+
+####################
+class Drone_Ostertag2019_Regions(Drone_Ostertag2019):
+    """
+    Drone that flies with a velocity controller as proposed in Ostertag (2019)
+
+    Utilizes a greedy algorithm to find the optimal velocity controller that
+    meets a minimium bound of the maximum steady state Kalman filter
+    uncertainty
+
+    Algorithm is modified to separate trajectory into bases that are perfectly aligned with regions of interest
+    """
+    def __init__(self, drone_id, env_model=None, b_verbose=True, b_logging=True, **cfg):
+        """
+        Initialze a drone that
+        """
+        self.list_kf_eqs = None
+
+        super(Drone_Ostertag2019_Regions, self).__init__(drone_id=drone_id, env_model=env_model,
+                                              b_logging=b_logging, b_verbose=b_verbose,
+                                              **cfg)
+
+        self.drone_desc = 'Drone with stability margin maximizing, position-dependent controller from Smith (2012)'
+
+    def form_traj(self):
+        """
+        Calculates a minimum-time trajectory using constant velocity in each segmented region using the methods outlined
+        in Ostertag (2019) and Ostertag (2020)
+        1. Calculate point order using TSP
+        2. Solve for optimal number of observations using Greedy Knockdown Algorithm
+        3. Calculate velocity for each segment required to meet observation times
+        """
+        if not(self.env_model):
+            self.s_p = None
+            self.s_v = None
+            self.s_a = None
+            self.s_j = None
+            self.b_traj_ready = False
+            return
+
+        # Determine optimal ordering of points of interest
+        list_q = self.env_model.get_pois()
+        q_trans = self.calc_tsp_order(list_q)
+
+        self.list_q = q_trans @ list_q
+        self.covar_e = q_trans @ self.covar_e @ q_trans.T
+
+        # Calculate minimum time spent in each region and total time spent not observing any POI
+        arr_T_obs, T_notobs = self.split_T_obs()
+
+        # Greedy Knockdown to calculate optimal number of observations
+        self.list_d = self.greedy_knockdown_algorithm(arr_T_obs, T_notobs)
+
+        # Create regional, rectangular basis functions (beta) and portion of betas from which a POI can be observed
+        self.L = self.calc_path_length(self.list_q)
+        arr_beta_edges = self.calc_aligned_beta_edges()
+        arr_dtheta_beta = self.calc_int_beta(arr_beta_edges)
+
+        # Set up optimization problem
+        prob_statement = pulp.LpProblem('Ostertag2019', pulp.LpMinimize)
+
+        # Create variables
+        list_alphavar = [pulp.LpVariable('a{0:03d}'.format(i), lowBound=(1 / self.vmax),
+                                         cat=pulp.LpContinuous) for i in range(self.J)]
+
+        # Add objective statement
+        prob_statement += pulp.lpSum(list_alphavar)
+
+        # Add constraints from greedy Kalman Filter alg
+        for ind_coeff, coeff_row in enumerate(arr_dtheta_beta):
+            prob_statement += pulp.LpConstraint((pulp.lpDot(coeff_row, list_alphavar)),
+                                                sense=pulp.constants.LpConstraintGE,
+                                                name='KF const{0}'.format(ind_coeff),
+                                                rhs=(self.list_d[ind_coeff] / self.fs))
+
+        # prob_statement.writeLP('Ostertag2019regionsModel.lp')
+        prob_statement.solve()
+
+        arr_alpha = np.array([v.varValue for v in prob_statement.variables() if v.name != 'B']).flatten()
+
+        # Split first segment into first and last segments and roll positions back by 1/2 sensing region width
+        arr_beta_edges = arr_beta_edges - self.obs_rad
+        arr_beta_edges[0] = 0
+        arr_beta_edges = np.append(arr_beta_edges, arr_beta_edges[-1] + self.obs_rad)
+        arr_alpha = np.append(arr_alpha, arr_alpha[0])
+
+        arr_beta_p = self.calc_beta_pos(arr_beta_edges)
+
+        # Creative trajectory forming by splitting up the first ROI into first and last velocity regions
+        list_traj = []
+        # First point
+        p1 = arr_beta_p[0]
+        p2 = arr_beta_p[1]
+        alpha = arr_alpha[0]
+        T = np.sqrt(np.sum(np.power(p2 - p1, 2))) * alpha
+        list_traj.append({'type': 'linear', 'p1': p1, 'p2': p2, 'v': (1 / alpha), 'T': T})
+
+        # Middle points
+        for p1, p2, pq, p3, alpha1, alpha2 in zip(arr_beta_p[1:-3:2], arr_beta_p[2:-2:2],
+                                                  self.list_q[1:], arr_beta_p[3:-1:2],
+                                                  arr_alpha[1:-2:2], arr_alpha[2:-1:2]):
+            # Inter-point segment
+            T = np.sqrt(np.sum(np.power(p2 - p1, 2))) * alpha1
+            list_traj.append({'type': 'linear', 'p1': p1, 'p2': p2, 'v': (1 / alpha1), 'T': T})
+            # Inner-ROI segment 1
+            T = np.sqrt(np.sum(np.power(pq - p2, 2))) * alpha2
+            list_traj.append({'type': 'linear', 'p1': p2, 'p2': pq, 'v': (1 / alpha2), 'T': T})
+            # Inner-ROI segment 2
+            T = np.sqrt(np.sum(np.power(p3 - pq, 2))) * alpha2
+            list_traj.append({'type': 'linear', 'p1': pq, 'p2': p3, 'v': (1 / alpha2), 'T': T})
+
+        # Intersegment
+        p1 = arr_beta_p[-3]
+        p2 = arr_beta_p[-2]
+        alpha = arr_alpha[-2]
+        T = np.sqrt(np.sum(np.power(p2 - p1, 2))) * alpha
+        list_traj.append({'type': 'linear', 'p1': p1, 'p2': p2, 'v': (1 / alpha), 'T': T})
+
+        # Last point
+        p1 = arr_beta_p[-2]
+        p2 = arr_beta_p[-1]
+        alpha = arr_alpha[-1]
+        T = np.sqrt(np.sum(np.power(p2 - p1, 2))) * alpha
+        list_traj.append({'type': 'linear', 'p1': p1, 'p2': p2, 'v': (1 / alpha), 'T': T})
+
+        self.list_traj = list_traj
+        print('Ostertag 2019 (regions) v_controller solved ({0})'.format(pulp.LpStatus[prob_statement.status]))
+        print('  alpha  = ' + np.array2string(arr_alpha.flatten(), separator=', ',
+                                              formatter={'float_kind': lambda x: '{0:2.5f}'.format(x)},
+                                              max_line_width=2148))
+
+        self.create_s_function_map()
+
+        return self.calc_traj(0)
+
+    def calc_aligned_beta_edges(self):
+        """
+        Calculates the beta edges so that they perfectly align with regions of interest, starting at the entry to the
+        first region of interest
+        """
+        arr_beta_theta = np.zeros(self.N_q * 2 + 1)
+
+        # Iterate through POI to determine path in B and to the next POI
+        theta_start = 0
+
+        for ind_curr in range(len(self.list_q)):
+            theta_stop = (theta_start + 2 * self.obs_rad)
+
+            arr_beta_theta[2*ind_curr] = theta_start
+            arr_beta_theta[2*ind_curr + 1] = theta_stop
+
+            ind_next = (ind_curr + 1) % len(self.list_q)
+            pos_curr = self.list_q[ind_curr]
+            pos_next = self.list_q[ind_next]
+            theta_start += np.sqrt(np.sum(np.power(pos_next - pos_curr, 2)))
+
+        arr_beta_theta[-1] = self.L
+
+        return arr_beta_theta
+
+    def calc_int_beta(self, arr_beta_edges):
+        """
+        Calculates the length of path along each gamma segment where the beta edges perfectly align with regions of
+        interest
+        """
+        arr_dtheta_beta = np.zeros((self.N_q, 2*self.N_q))
+
+        # Iterate through POI to determine path in B and to the next POI
+        theta = 0
+
+        for ind_curr in range(len(self.list_q)):
+            arr_dtheta_beta[ind_curr, 2 * ind_curr] = 2 * self.obs_rad
+
+        return arr_dtheta_beta
 
 ####################
 class Drone_Ostertag2020(Drone_Base):
