@@ -885,7 +885,7 @@ class Drone_Smith2012(Drone_Base):
             theta = theta_prev + dist_dout
 
             # linear interpolation between the points of interest
-            ind_inrange = np.where(np.logical_and(theta_prev <= arr_beta_edges, arr_beta_edges < theta))
+            ind_inrange = np.where(np.logical_and(theta_prev <= arr_beta_edges, arr_beta_edges <= theta))
             alpha =  ((arr_beta_edges[ind_inrange] - theta_prev) / dist_dout).reshape(-1, 1) # value between 0 and 1
             arr_beta_p[ind_inrange, :] = (1 - alpha)*pos_curr + alpha*pos_next
 
@@ -1314,7 +1314,7 @@ class Drone_Ostertag2019(Drone_Base):
             theta = theta_prev + dist_dout
 
             # linear interpolation between the points of interest
-            ind_inrange = np.where(np.logical_and(theta_prev <= arr_beta_edges, arr_beta_edges < theta))
+            ind_inrange = np.where(np.logical_and(theta_prev <= arr_beta_edges, arr_beta_edges <= theta))
             alpha =  ((arr_beta_edges[ind_inrange] - theta_prev) / dist_dout).reshape(-1, 1) # value between 0 and 1
             arr_beta_p[ind_inrange, :] = (1 - alpha)*pos_curr + alpha*pos_next
 
@@ -1698,7 +1698,7 @@ class Drone_Ostertag2020(Drone_Base):
         # TODO Implement more intelligent search method
         stop_gammatol = 0.01
         stop_ttol = 0.05
-        maxiter = 20
+        maxiter = 50
         smallstep = 1.05
         backstep = 1 / (smallstep)**(1/5)
         barr_valid = np.zeros(maxiter)
