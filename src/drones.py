@@ -212,10 +212,78 @@ class Drone_Base():
             return
 
         self.list_q = self.env_model.get_pois()
+        self.N_q = len(self.list_q)
 
         self.create_s_function_map()
 
         return self.calc_traj(0)
+
+    def greedy_knockdown_algorithm(self, arr_T_min, T_notobs):
+        """
+        Implementation of the Greedy Knockdown Algorithm from Ostertag (2020)
+        """
+
+        print('Greedy Knockdown Algorithm')
+        print(arr_T_min)
+
+        # Generate Kalman filter steady state equations that need to be solved
+        # for each iteration of the loop
+        kf_depth = 6
+
+        if (self.list_kf_eqs is None):
+            self.list_kf_eqs = generate_func_kfsteadystate(depth=kf_depth)
+
+        V = sympy.symbols('V')
+        Twc = sympy.symbols('Twc')
+        W = sympy.symbols('W')
+        lambda_T0 = sympy.symbols('lambda_T0')
+
+        N_loops = 100
+        N_kf = np.zeros((N_loops, self.N_q)).astype(int)  # Number of observations at each point of interest
+        N_kf[0, :] = 1
+        sig_max = np.zeros((N_loops - 1, self.N_q))
+        for ind_loop in range(N_loops - 1):
+            # Observed path should move at either max speed or minimum required time to take one sample
+            T_obs = np.max(np.append(arr_T_min.reshape(-1, 1), N_kf[ind_loop, :].reshape(-1, 1) / self.fs, axis=1), axis=1)
+
+            # Predicted worst case time for single loop with d_i observations per location i
+            T_loop = np.ceil((np.sum(T_obs) + T_notobs) * self.fs) / self.fs
+
+            # Calculate steady state value for each point
+            for ind_i in range(self.N_q):
+                eq_temp = self.list_kf_eqs[N_kf[ind_loop, ind_i] - 1].subs(
+                    {V: self.covar_obs, W: self.covar_e[ind_i, ind_i], Twc: T_loop})
+                # Solve for steady-state covariance using sympy.nsolve by providing an initial solution vector from the
+                # previously solved step
+                if (ind_loop == 0):
+                    sig_max[ind_loop, ind_i] = sympy.nsolve(eq_temp, lambda_T0, self.covar_s[ind_i, ind_i])
+                else:
+                    sig_max[ind_loop, ind_i] = sympy.nsolve(eq_temp, lambda_T0, sig_max[ind_loop - 1, ind_i])
+
+            print(N_kf[ind_loop, :])
+            print(sig_max[ind_loop, :])
+            print('\n')
+
+            N_kf[ind_loop + 1, :] = N_kf[ind_loop, :]
+            # Add observation the poi with the highest uncertainty
+            ind_max = np.argmax(sig_max[ind_loop, :])
+            N_kf[ind_loop + 1, ind_max] += 1
+
+            # TODO Update end condition
+            if (N_kf[ind_loop + 1, ind_max] >= kf_depth):
+                break
+
+        sig_max_temp = np.max(sig_max, axis=1)
+        ind_row_max = np.argmin(sig_max_temp[(sig_max_temp > 0).flatten()])
+        self.covar_bound = sig_max_temp[ind_row_max]
+        ind_row_min = np.argmin(sig_max_temp[(sig_max_temp > 0).flatten()])
+
+        print('Optimal after {0} obs'.format(ind_row_min))
+        print(N_kf[ind_row_min, :])
+        print(sig_max[ind_row_min, :])
+        print('\n')
+
+        return N_kf[ind_row_min, :]
 
     def calc_tsp_order(self, list_q):
         """
@@ -1162,71 +1230,6 @@ class Drone_Ostertag2020(Drone_Base):
                                                  **cfg)
 
         self.drone_desc = 'Drone with minimum-time feasible B-spline trajectory'
-
-    def greedy_knockdown_algorithm(self, arr_T_min, T_notobs):
-        """
-        Implementation of the Greedy Knockdown Algorithm from Ostertag (2020)
-        """
-
-        print('Greedy Knockdown Algorithm')
-        print(arr_T_min)
-
-        # Generate Kalman filter steady state equations that need to be solved
-        # for each iteration of the loop
-        kf_depth = 6
-
-        if (self.list_kf_eqs is None):
-            self.list_kf_eqs = generate_func_kfsteadystate(depth=kf_depth)
-
-        V = sympy.symbols('V')
-        Twc = sympy.symbols('Twc')
-        W = sympy.symbols('W')
-        lambda_T0 = sympy.symbols('lambda_T0')
-
-        N_loops = 100
-        N_kf = np.zeros((N_loops, self.N_q)).astype(int)  # Number of observations at each point of interest
-        N_kf[0, :] = 1
-        sig_max = np.zeros((N_loops - 1, self.N_q))
-        for ind_loop in range(N_loops - 1):
-            # Observed path should move at either max speed or minimum required time to take one sample
-            T_obs = np.max(np.append(arr_T_min.reshape(-1, 1), N_kf[ind_loop, :].reshape(-1, 1) / self.fs, axis=1), axis=1)
-
-            # Predicted worst case time for single loop with d_i observations per location i
-            T_loop = np.ceil((np.sum(T_obs) + T_notobs) / self.fs) * self.fs
-
-            # Calculate steady state value for each point
-            for ind_i in range(self.N_q):
-                eq_temp = self.list_kf_eqs[N_kf[ind_loop, ind_i] - 1].subs(
-                    {V: self.covar_obs, W: self.covar_e[ind_i, ind_i], Twc: T_loop})
-                # Solve for steady-state covariance using sympy.nsolve by providing an initial solution vector from the
-                # previously solved step
-                if (ind_loop == 0):
-                    sig_max[ind_loop, ind_i] = sympy.nsolve(eq_temp, lambda_T0, self.covar_s[ind_i, ind_i])
-                else:
-                    sig_max[ind_loop, ind_i] = sympy.nsolve(eq_temp, lambda_T0, sig_max[ind_loop - 1, ind_i])
-
-            print(N_kf[ind_loop, :])
-            print(sig_max[ind_loop, :])
-            print('\n')
-
-            N_kf[ind_loop + 1, :] = N_kf[ind_loop, :]
-            # Add observation the poi with the highest uncertainty
-            ind_max = np.argmax(sig_max[ind_loop, :])
-            N_kf[ind_loop + 1, ind_max] += 1
-
-            # TODO Update end condition
-            if (N_kf[ind_loop + 1, ind_max] >= kf_depth):
-                break
-
-        sig_max_temp = np.max(sig_max, axis=1)
-        ind_row_min = np.argmin(sig_max_temp[(sig_max_temp > 0).flatten()])
-
-        print('Optimal after {0} obs'.format(ind_row_min))
-        print(N_kf[ind_row_min, :])
-        print(sig_max[ind_row_min, :])
-        print('\n')
-
-        return N_kf[ind_row_min, :]
 
     def form_problem(self, m, d, b_slack=False):
         """
