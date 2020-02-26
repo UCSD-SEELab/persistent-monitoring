@@ -47,7 +47,6 @@ class Model_Base():
     """
     Base class for environmental models that holds all basic functionality
     """
-    
     def __init__(self, env_size=np.array([100,100]), N_q=10, step_size=1,
                  b_terrain=False, b_verbose=True, b_logging=True):
         """
@@ -199,7 +198,64 @@ class Model_Base():
         ax.set_xlim([0, self.env_size[0]])
         ax.set_ylim([0, self.env_size[1]])
 
+####################
+class Model_Randomized(Model_Base):
+    """
+    Randomized non-overlapping points of interest
+    """
+    def __init__(self, env_size=np.array([100,100]), N_q=10, step_size=1, B=10,
+                 b_terrain=False, b_verbose=True, b_logging=True):
+        """
+        Initializes an environmental model that has N_q randomly initialized points
+        """
+        # Sensing radius of the robotic system
+        self.B = B
 
+        super(Model_Randomized, self).__init__(env_size=env_size, N_q=N_q, step_size=step_size,
+                                               b_terrain=b_terrain, b_verbose=b_verbose, b_logging=b_logging)
+
+    def init_pois(self):
+        """
+        Initialize the points of interest x spread across a grid in random fashion and uncertainty growth rates with a
+        chi-squared distribution
+        """
+        b_searching = True
+        arr_q = np.zeros((self.N_q, 2))
+
+        while (b_searching):
+            # Initialize grid of all possible points
+            x_pos = np.arange(self.B + 1, self.env_size[0] - self.B - 1)
+            y_pos = np.arange(self.B + 1, self.env_size[0] - self.B - 1)
+
+            x_mesh, y_mesh = np.meshgrid(x_pos, y_pos)
+
+            xy_ind = np.arange(len(x_pos) * len(y_pos))
+            xy_valid = np.ones(xy_ind.shape).astype(bool)
+
+            for ind_q in range(self.N_q):
+                # Choose a single valid location
+                ind_point = np.random.choice(xy_ind[xy_valid])
+                x_ind = ind_point % len(x_pos)
+                y_ind = ind_point // len(x_pos)
+
+                # Add to the array
+                x = x_pos[x_ind]
+                y = y_pos[y_ind]
+                arr_q[ind_q, 0], arr_q[ind_q, 1] = x, y
+
+                # Invalidate all other points within range
+                mesh_valid = np.power(x_mesh - x, 2) + np.power(y_mesh - y, 2) > (2 * self.B)**2
+                xy_valid = np.logical_and(xy_valid, mesh_valid.flatten())
+
+                if ind_q == (self.N_q - 1):
+                    b_searching = False
+
+                if all(xy_valid == False):
+                    break
+
+        self.list_q = arr_q
+
+        self.covar_env = np.diag((2*np.random.random(size=self.N_q))**2)
 
 ####################
 """

@@ -17,7 +17,7 @@ import math
 import logging
 import numpy as np
 import csv
-from env_models import Model_Base
+from env_models import Model_Base, Model_Randomized
 from drones import Drone_Base, Drone_Ostertag2020, Drone_Constant, Drone_Ostertag2019, Drone_Smith2012
 from drones import Drone_Smith2012_Regions, Drone_Ostertag2019_Regions
 from shapely.geometry import Polygon  # , LineString,  Point
@@ -324,8 +324,10 @@ if __name__ == '__main__':
         print('Test {0:4d}/{1}'.format(ind_test + 1, N_tests))
 
         # Setup environmental model
-        env_model = Model_Base(env_size=env_size, step_size=step_size, N_q=param_N_q,
-                                              b_verbose=b_verbose, b_logging=b_logging)
+        # env_model = Model_Base(env_size=env_size, step_size=step_size, N_q=param_N_q,
+        #                                       b_verbose=b_verbose, b_logging=b_logging)
+        env_model = Model_Randomized(env_size=env_size, step_size=step_size, N_q=param_N_q, B=10,
+                                     b_verbose=b_verbose, b_logging=b_logging)
         sim_env.set_env_model(env_model)
 
         fs = 1 / (steps_per_sample * step_time)
