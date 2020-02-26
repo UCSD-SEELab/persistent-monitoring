@@ -472,7 +472,7 @@ class Drone_Base():
         """
         pass
 
-    def update(self, dt):
+    def update(self, dt, b_sample=True):
         """
         Moves the drone based on the velocity calculated by calc_movement(). 
         Then, captures an observation and updates the Kalman filter.
@@ -483,13 +483,19 @@ class Drone_Base():
 
         # Update current prediction of estimated states, capture an observation, and update Kalman filter
         self.update_predict(dt)
-        self.capture_data()
-        self.update_kalman()
-        
+        temp_covar = np.append(t, np.diag(self.get_covar_s())).reshape(1, -1)
+
+        if b_sample:
+            self.capture_data()
+            self.update_kalman()
+            temp_covar = np.append(temp_covar, np.append(t, np.diag(self.get_covar_s())).reshape(1, -1), axis=0)
+
         # Log information
         self.log_iter()
 
         self.t_prev = t
+
+        return temp_covar
     
     def capture_data(self):
         """

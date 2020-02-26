@@ -31,7 +31,7 @@ class Sim_Environment():
     Simulation environment for single robotic platforms measuring N random points of interest
     """
 
-    def __init__(self, swarm_controller=None, env_model=None, step_time=1,
+    def __init__(self, swarm_controller=None, env_model=None, step_time=1, steps_per_sample=1,
                  b_verbose=True, b_logging=True):
         """
         """
@@ -39,6 +39,9 @@ class Sim_Environment():
         self.b_verbose = b_verbose
         self.b_logging = b_logging
         self.step_time = step_time
+        self.steps_per_sample = steps_per_sample
+
+        self.step_count = 0
 
         self.swarm_controller = swarm_controller
         if (swarm_controller == None):
@@ -87,15 +90,21 @@ class Sim_Environment():
         if (self.swarm_controller):
             self.swarm_controller.init_sim()
 
+        self.step_count = 0
+
     def update(self):
         """
-        description
+        Updates the environmental model and then each robotic platform
         """
+        b_sample = (self.step_count % self.steps_per_sample) == 0
+
         if (self.env_model):
             self.env_model.update( dt=self.step_time )
 
         if (self.swarm_controller):
-            self.swarm_controller.update( dt=self.step_time)
+            self.swarm_controller.update( dt=self.step_time, b_sample=b_sample)
+
+        self.step_count += 1
 
     def save_results(self, param_ros=0,
                      param_covar_0_scale=0,
@@ -174,40 +183,42 @@ class SwarmController():
         Adds a drone specified by drone_type, which should be a drone model that conforms to the standard in drones.py.
         cfg is a dictionary that holds the configuration of the drone for all required parameters by the class.
         """
-        # try:
+        #try:
         temp_drone = drone_type(drone_id=drone_id, b_verbose=b_verbose, b_logging=b_logging, **cfg)
         self.list_drones.append(temp_drone)
         print('Drone ({0}) added to swarm_controller'.format(drone_type.__name__))
-        """except:
-            print(sys.exc_info())
-            print('Drone ({0}) failed to be created with parameters {1}'.format(drone_type.__name__, cfg))
-        """
+        #except:
+        #    print(sys.exc_info())
+        #    print('Drone ({0}) failed to be created with parameters {1}'.format(drone_type.__name__, cfg))
 
     def init_sim(self):
         """
         Initialize each drone for simulation that is about to start
         """
-
         for drone in self.list_drones:
             drone.init_sim()
 
-    def update(self, dt):
+        self.arr_covar = np.zeros((len(self.list_drones), 0, self.env_model.N_q + 1))
+
+    def update(self, dt, b_sample=True):
         """
         description
         """
-        temp_covar_max = np.zeros((len(self.list_drones), 1))
+        if b_sample:
+            temp_covar = np.zeros((len(self.list_drones), 2, self.env_model.N_q + 1))
+        else:
+            temp_covar = np.zeros((len(self.list_drones), 1, self.env_model.N_q + 1))
 
-        for ind, drone in enumerate(self.list_drones):
-            drone.update( dt )
-            temp_covar_max[ind, 0] = np.max(np.diag(drone.get_covar_s()))
+        for ind_drone, drone in enumerate(self.list_drones):
+            temp_covar[ind_drone, :, :] = drone.update(dt, b_sample=b_sample)
 
-        # self.list_covar_max = np.append(self.list_covar_max, temp_covar_max, axis=1)
+        self.arr_covar = np.append(self.arr_covar, temp_covar, axis=1)
 
-    def reset_covar_max(self):
+    def reset_covar(self):
         """
         Reset self.list_covar_max to initial value
         """
-        self.list_covar_max = self.list_covar_max_0[:]
+        self.arr_covar = np.zeros((len(self.list_drones), 0, self.env_model.N_q + 1))
 
     def set_env_model(self, env_model):
         """
@@ -223,13 +234,13 @@ class SwarmController():
         """
         return self.list_covar_max
 
-    def reset_drone(self, theta0, covar_0_scale=100):
+    def reset_drones(self, theta0, covar_0_scale=100):
         """
         Resets the drone to a provided theta0 with some initial
         covariance scaled by covar_0_scale while maintaining any generated
         models
         """
-        self.reset_covar_max()
+        self.reset_covar()
         for ind, drone in enumerate(self.list_drones):
             drone.init_covar(covar_0_scale)
             drone.set_theta(theta0)
@@ -237,7 +248,6 @@ class SwarmController():
     def visualize(self):
         for ind, drone in enumerate(self.list_drones):
             drone.visualize(colors.get_cmap('tab10')(ind % 10))
-
 
 ####################
 """
@@ -291,6 +301,7 @@ if __name__ == '__main__':
     N_tests = 1
     step_size = 1
     step_time = 0.1
+    steps_per_sample = 5
 
     # env_model
     env_size = np.array([100, 100])
@@ -305,8 +316,8 @@ if __name__ == '__main__':
         logger = logging.getLogger('root')
 
     # Configure simulation environment and initialize
-    sim_env = Sim_Environment(swarm_controller=None, env_model=None, step_time=step_time,
-                 b_verbose=True, b_logging=True)
+    sim_env = Sim_Environment(swarm_controller=None, env_model=None, steps_per_sample=steps_per_sample,
+                              step_time=step_time, b_verbose=True, b_logging=True)
 
     for ind_test in range(N_tests):
         print('Test {0:4d}/{1}'.format(ind_test + 1, N_tests))
@@ -316,17 +327,19 @@ if __name__ == '__main__':
                                               b_verbose=b_verbose, b_logging=b_logging)
         sim_env.set_env_model(env_model)
 
+        fs = 1 / (steps_per_sample * step_time)
+
         # Set up swarm controller and drones to test
         swarm_controller = SwarmController(env_model=env_model, b_verbose=b_verbose, b_logging=b_logging)
         sim_env.set_swarm_controller(swarm_controller)
-        swarm_controller.add_drone(drone_type=Drone_Constant, drone_id='Drone1', b_verbose=b_verbose, b_logging=b_logging,
-                                   cfg={'env_model': env_model, 'vmax':25, 'fs':2})
+        # swarm_controller.add_drone(drone_type=Drone_Constant, drone_id='Drone1', b_verbose=b_verbose, b_logging=b_logging,
+        #                            cfg={'env_model': env_model, 'vmax':25, 'fs':fs})
         swarm_controller.add_drone(drone_type=Drone_Ostertag2020, drone_id='Drone2', b_verbose=b_verbose, b_logging=b_logging,
-                                   cfg={'env_model': env_model, 'vmax':25, 'fs':2})
+                                   cfg={'env_model': env_model, 'vmax':25, 'fs':fs})
         swarm_controller.add_drone(drone_type=Drone_Ostertag2019, drone_id='Drone3', b_verbose=b_verbose, b_logging=b_logging,
-                                    cfg={'env_model': env_model, 'vmax':25, 'fs':2})
+                                   cfg={'env_model': env_model, 'vmax':25, 'fs':fs})
         swarm_controller.add_drone(drone_type=Drone_Smith2012, drone_id='Drone4', b_verbose=b_verbose, b_logging=b_logging,
-                                   cfg={'env_model': env_model, 'vmax': 25, 'fs': 2})
+                                   cfg={'env_model': env_model, 'vmax': 25, 'fs':fs})
 
         # Everything is connected, initialize
         sim_env.init_sim()
@@ -338,7 +351,7 @@ if __name__ == '__main__':
             # if ((ind_loop >= 2) and ((ind_loop % 5) == 0)):
             #     sim_env.visualize()
             sim_env.visualize()
-            time.sleep(0.01)
+            time.sleep(0.001)
 
     if (b_logging):
         logging.shutdown()
