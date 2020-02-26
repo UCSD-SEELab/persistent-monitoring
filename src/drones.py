@@ -639,302 +639,251 @@ class Drone_Constant(Drone_Base):
                                 {'type': 'linear', 't1': t1, 't2': t2, 'p1': p1, 'p2': p2, 'T': (t2 - t1)}])
 
 ####################
-class Drone_Smith(Drone_Base):
+class Drone_Smith2012(Drone_Base):
     """
     Drone that flies with a velocity controller as proposed in Smith (2012)
-        Smith SL, Schwager M, Rus D. Persistent robotic tasks: Monitoring and 
-        sweeping in changing environments. IEEE Transactions on Robotics. 2012 
-        Apr;28(2):410-26.
+        Smith SL, Schwager M, Rus D. Persistent robotic tasks: Monitoring and sweeping in changing environments. IEEE
+        Transactions on Robotics. 2012 Apr;28(2):410-26.
     
     New variables:
         J: number of rectangular segments to use as basis functions
     """
-    
-    def __init__(self, loop_path, poi, covar_e, obs_window, covar_obs, 
-                 drone_id=0, theta0=0, fs=1, v_max=20, v_min=0, 
-                 covar_s_0_scale=100, J=100, b_verbose=True, b_logging=True):
+    DEFAULT_J = 200
+
+    def __init__(self, drone_id, env_model=None, b_verbose=True, b_logging=True, **cfg):
         """
-        Initialze a drone that flies at a constant velocity around the path
+        Initialze a drone that
         """
-        super(Drone_Smith, self).__init__(loop_path, poi, covar_e, 
-             obs_window, covar_obs, drone_id=drone_id, theta0=theta0, fs=fs, 
-             v_max=v_max, v_min=v_min, covar_s_0_scale=covar_s_0_scale,
-             b_logging=b_logging, b_verbose=b_verbose)
-        
-        self.J = J
-        self.create_v_controller() # Creates an optimal velocity controller
-        
-        
-    def create_v_controller(self):
+        self.list_kf_eqs = None
+
+        if 'J' in cfg.keys():
+            self.J = cfg['J']
+        else:
+            self.J = Drone_Smith2012.DEFAULT_J
+
+        super(Drone_Smith2012, self).__init__(drone_id=drone_id, env_model=env_model,
+                                                 b_logging=b_logging, b_verbose=b_verbose,
+                                                 **cfg)
+
+        self.drone_desc = 'Drone with stability margin maximizing, position-dependent controller from Smith (2012)'
+
+    def form_traj(self):
         """
-        Creates an optimal position-dependent velocity controller with J steps
-        based on the methodology outlined in Smith (2012)
+        Calculates a optimal position-dependent velocity controller with J steps based on the methodology outlined in
+        Smith (2012)
+        1. Calculate point order using TSP
+        2. Solve for optimal number of observations based on linear approximation of uncertainty gain/loss
+        3. Calculate velocity for each segment
         """
+        if not(self.env_model):
+            self.s_p = None
+            self.s_v = None
+            self.s_a = None
+            self.s_j = None
+            self.b_traj_ready = False
+            return
+
+        # Determine optimal ordering of points of interest
+        list_q = self.env_model.get_pois()
+        q_trans = self.calc_tsp_order(list_q)
+
+        self.list_q = q_trans @ list_q
+        self.covar_e = q_trans @ self.covar_e @ q_trans.T
+
         # Growth in uncertainty is due to environmental noise
         p = np.diag(self.covar_e)
-        
+
         # Decrease in uncertainty is from Kalman filter, which can only measure
         # when q is within sensing range. The decrease at steady state can be
         # approximated as the product of amount of time for 1 cycle of the loop
         # and the growth of the point
-        
-        # Total amount of time that each point is observed
-        dtheta_obs = np.zeros((self.N_q, 1))
-        list_gamma_obs = []     # list of observation segments
-        list_theta_obs = []     # list of theta for beginning and ending of observation segments
-        
-        for ind_q, q in enumerate(self.list_q):            
-            # Create region around q in which q can be sensed
-            B_q = translate(self.B, xoff=q[0], yoff=q[1])
-            # Split gamma and determine which section can sense point q
-            gamma_temp = LineString(self.gamma)
-            gamma_split = split(gamma_temp, B_q)
-            
-            list_dtheta = np.array([gamma_seg.length for gamma_seg in gamma_split])
-            list_theta = np.cumsum(list_dtheta)
-            # list_valid method fails around start/stop of loop 
-            # list_valid = np.array([B_q.contains(Point(np.array(gamma_seg)[1,:])) for gamma_seg in gamma_split])
-            # Valid/invalid segments will alternate. Determine if second
-            # segment is valid or not. If too large, likely invalid.
-            list_valid = np.zeros(list_theta.shape).astype(bool).flatten()
-            if (list_dtheta[1] > self.L/2):
-                list_valid[0::2] = True
-            else:
-                list_valid[1::2] = True
-                
-            N_segs = list_valid.shape[0]
-            dtheta_obs[ind_q] = np.sum(list_dtheta[list_valid])
-            theta_obs = []
-            gamma_obs = []
-            for ind_seg, valid, theta, gamma_seg in zip(range(N_segs), list_valid, list_theta, gamma_split):
-                if (valid):
-                    gamma_obs.append(gamma_seg)
-                    if (ind_seg == 0):
-                        theta_obs.append([0, theta])
-                    elif (ind_seg == (N_segs-1)):
-                        theta_obs.append([list_theta[ind_seg-1], self.L])
-                    else:
-                        theta_obs.append([list_theta[ind_seg-1], theta])
-            
-            list_theta_obs.append(theta_obs)
-            list_gamma_obs.append(gamma_obs)
-        
-        list_gamma_obs_flat = [gamma_seg for sublist in list_gamma_obs for gamma_seg in sublist]
-        gamma_cumobs = MultiLineString(list_gamma_obs_flat)
-        gamma_cumobs = linemerge(gamma_cumobs)
-        
-        # Observed path should move at either max speed or minimum required 
-        # time to take one sample
-        T_obs = np.max(np.append(dtheta_obs/self.v_max, np.ones((self.N_q, 1))/self.fs, axis=1), axis=1)
-        
-        # Unobserved path should move at top speed
-        if (isinstance(gamma_cumobs, shapely.geometry.LineString)):
-            L_notobs = self.L - gamma_cumobs.length
-        elif (isinstance(gamma_cumobs, shapely.geometry.MultiLineString)):
-            L_notobs = self.L
-            for gamma_cumobs_ in gamma_cumobs:
-                    L_notobs -= gamma_cumobs_.length
-                    
-        T_notobs = L_notobs / self.v_max
-        
-        # Predicted time for single loop with 1 obs per location
-        T0 = np.sum(T_obs) + T_notobs
-        # First-order approximation of Kalman filter decrease
-        c = T0 * p
-        
-        # Create basis functions
-        list_beta = np.linspace(0, self.L, num=(self.J+1))
-        list_beta = list_beta[0:-1].reshape((-1,1))
 
-        list_dtheta_beta = self.calc_int_beta(list_theta_obs, list_beta)
-        N_segs_total = sum([len(dtheta_beta_seg)**2 for dtheta_beta_seg in list_dtheta_beta[:,0]])
-        
+        # Calculate minimum time spent in each region and total time spent not observing any POI
+        arr_T_obs, T_notobs = self.split_T_obs()
+        T_obs = np.sum(np.max(np.append(arr_T_obs.reshape((-1, 1)), np.ones((self.N_q, 1)) / self.fs, axis=1), axis=1))
+        # Predicted time for single loop with 1 obs per location
+        T0 = T_obs + T_notobs
+        # First-order approximation of Kalman filter decrease, assuming error decreases in a single-sample
+        c = T0 * p * self.fs
+
+        # Create rectangular basis functions (beta) and portion of betas from which a POI can be observed
+        self.L = self.calc_path_length(self.list_q)
+        arr_beta_edges = np.linspace(0, self.L, num=(self.J + 1))
+        arr_dtheta_beta = self.calc_int_beta(arr_beta_edges)
+
         # Calculate K as defined in Smith (2012) Eq. (8)
         K = np.zeros((self.N_q, self.J))
         for ind_i in range(self.N_q):
             for ind_j in range(self.J):
-                K[ind_i, ind_j] = np.sum(list_dtheta_beta[ind_i,ind_j]) - p[ind_i]/c[ind_i]*self.L/self.J
-        
-        # Calculate X as defined in Smith (2012) Eq. (19)
-        list_dtheta_beta_edge2edge = self.calc_int_beta_edge2edge(list_theta_obs, list_beta)
-        X = np.zeros((N_segs_total, self.J))
-        ind_seg = 0
+                K[ind_i, ind_j] = np.sum(arr_dtheta_beta[ind_i, ind_j]) - p[ind_i] / c[ind_i] * self.L / self.J
+
+        # Calculate X as defined in Smith (2012) Eq. (19) using only a single continuous observation per loop
+        X = np.zeros((self.N_q, self.J))
         for ind_i in range(self.N_q):
-            N_segs = len(list_dtheta_beta[ind_i, ind_j])
-            for k in range(N_segs):
-                for b in range(N_segs):
-                    for ind_j in range(self.J):
-                        X_growth = p[ind_i]*list_dtheta_beta_edge2edge[ind_seg, ind_j]
-                        ind_decay = (k - np.arange(b + 1)) % N_segs
-                        X_decay = c[ind_i]*sum([list_dtheta_beta[ind_i, ind_j][ind] for ind in ind_decay])
-                        X[ind_seg, ind_j] = X_growth - X_decay
-                    ind_seg += 1
-        
+            for ind_j in range(self.J):
+                X_growth = p[ind_i] * self.L / self.J
+                X_decay = c[ind_i] * arr_dtheta_beta[ind_i, ind_j]
+                X[ind_i, ind_j] = X_growth - X_decay
+
         # Set up optimization problem
         prob_statement = pulp.LpProblem('Smith 2012', pulp.LpMinimize)
-        
+
         # Create variables
-        list_alphavar = [pulp.LpVariable('a{0:03d}'.format(i), lowBound=1/self.v_max,
-                         cat=pulp.LpContinuous) for i in range(self.J)]
+        list_alphavar = [pulp.LpVariable('a{0:03d}'.format(i), lowBound=(1 / self.vmax),
+                                         cat=pulp.LpContinuous) for i in range(self.J)]
         marginvar = pulp.LpVariable('B', lowBound=0, cat=pulp.LpContinuous)
-        
+
         # Add objective statement
         prob_statement += (marginvar)
-        
+
         # Add constraints with X
         for ind_X, X_row in enumerate(X):
-            prob_statement += pulp.LpConstraint((pulp.lpDot(X_row, list_alphavar) - marginvar), 
-                                        sense=pulp.constants.LpConstraintLE, 
+            prob_statement += pulp.LpConstraint((pulp.lpDot(X_row, list_alphavar) - marginvar),
+                                        sense=pulp.constants.LpConstraintLE,
                                         name='X const{0}'.format(ind_X), rhs=0)
+
         # Add constraints with K
         for ind_K, K_row in enumerate(K):
-            prob_statement += pulp.LpConstraint((pulp.lpDot(K_row, list_alphavar)), 
-                                        sense=pulp.constants.LpConstraintGE, 
-                                        name='K const{0}'.format(ind_K), rhs=0)
-        
+            prob_statement += pulp.LpConstraint((pulp.lpDot(K_row, list_alphavar)),
+                                                sense=pulp.constants.LpConstraintGE,
+                                                name='K const{0}'.format(ind_K), rhs=0)
+
         # prob_statement.writeLP('SmithModel.lp')
         prob_statement.solve()
-        
-        list_alpha = np.array([v.varValue for v in prob_statement.variables()])[1:].reshape((-1,1))
-        
-        self.v_controller = np.append(list_beta, list_alpha, axis=1)
-        print('Smith v_controller solved ({0})'.format(pulp.LpStatus[prob_statement.status]))
-        if (self.b_logging):
-            self.logger.debug('v_controller solved ({0})'.format(pulp.LpStatus[prob_statement.status]))
-            self.logger.debug('alpha  = ' + np.array2string(list_alpha.flatten(), separator=', ', formatter={'float_kind':lambda x: '{0:2.5f}'.format(x)}, max_line_width=2148))
 
-    
-    def calc_int_beta(self, list_theta_obs, list_beta):
+        arr_alpha = np.array([v.varValue for v in prob_statement.variables() if v.name != 'B']).flatten()
+        arr_beta_p = self.calc_beta_pos(arr_beta_edges)
+
+        list_traj = []
+        for p1, p2, alpha in zip(arr_beta_p[:-1], arr_beta_p[1:], arr_alpha):
+            T = np.sqrt(np.sum(np.power(p2 - p1, 2))) * alpha
+            list_traj.append({'type':'linear', 'p1': p1, 'p2': p2, 'v':(1 / alpha), 'T':T})
+
+        self.list_traj = list_traj
+        print('Smith 2012 v_controller solved ({0})'.format(pulp.LpStatus[prob_statement.status]))
+        print('  alpha  = ' + np.array2string(arr_alpha.flatten(), separator=', ',
+                                                            formatter={'float_kind': lambda x: '{0:2.5f}'.format(x)},
+                                                            max_line_width=2148))
+
+        self.create_s_function_map()
+
+        return self.calc_traj(0)
+
+    def create_s_function_map(self):
         """
-        Calculates the length of path along each gamma segment, denoted by 
-        theta_start and theta_stop, where q_i is observable that is in 
+        Creates a look-up table that links current time around the loop to a segment in a piecewise trajectory function
+        """
+        self.s_fmap = []
+
+        s_t2 = np.cumsum(np.array([traj_seg['T'] for traj_seg in self.list_traj]))
+        s_t1 = np.roll(s_t2, 1, axis=0)
+        s_t1[0] = 0
+
+        for t1, t2, traj_seg in zip(s_t1, s_t2, self.list_traj):
+            if traj_seg['type'] == 'linear':
+                p1 = traj_seg['p1']
+                p2 = traj_seg['p2']
+                v = traj_seg['v']
+                self.s_fmap.append([t1, t2,
+                                    partial(tfunc_linear, t1=t1, t2=t2, p1=p1, p2=p2),
+                                    partial(tfunc_const, val=(p2 - p1) / np.sqrt(np.sum(np.power(p2 - p1, 2))) * v),
+                                    partial(tfunc_const, val=np.zeros(p1.shape)),
+                                    partial(tfunc_const, val=np.zeros(p1.shape)),
+                                    {'type': 'linear', 't1': t1, 't2': t2, 'p1': p1, 'p2': p2, 'T': (t2 - t1)}])
+
+        print('New trajectory function map generated.')
+
+    def split_T_obs(self):
+        """
+        Extract the minimum time spent in each region and the total time of non-observed regions between each POI
+        assuming travelling at maximum velocity
+        """
+        arr_T = np.zeros(self.N_q)
+        T_notobs = 0
+
+        # Iterate through POI to determine amount of time travelling in non-observed regions
+        for ind_curr in range(len(self.list_q)):
+            ind_next = (ind_curr + 1) % len(self.list_q)
+
+            pos_curr = self.list_q[ind_curr]
+            pos_next = self.list_q[ind_next]
+
+            pos_dout = pos_next - pos_curr
+
+            theta_out = np.arctan2(pos_dout[1], pos_dout[0])
+            pos_out = pos_curr + np.array([np.cos(theta_out), np.sin(theta_out)]) * self.obs_rad
+            pos_in_next = pos_next - np.array([np.cos(theta_out), np.sin(theta_out)]) * self.obs_rad
+
+            t_to_next = np.sum((pos_in_next - pos_out) ** 2) ** 0.5 / self.vmax
+
+            T_notobs += t_to_next
+
+            # Update if necessary
+            arr_T[ind_curr] = 2 * self.obs_rad / self.vmax
+
+        return arr_T, T_notobs
+
+    def calc_int_beta(self, arr_beta_edges):
+        """
+        Calculates the length of path along each gamma segment, denoted by
+        theta_start and theta_stop, where q_i is observable that is in
         list_beta[j:j+1]
         """
-        list_dtheta_beta = []
-        
-        # Iterate through all points of interest
-        for ind_i, theta_obs in enumerate(list_theta_obs):
-            dtheta_beta = []
-            # Iterate through all betas
-            beta_start = list_beta.item(0)
-            for ind_j in range(self.J):                
-                if (ind_j == (len(list_beta) - 1)):
-                    beta_stop = self.L
-                else:
-                    beta_stop = list_beta.item(ind_j+1)
+        arr_dtheta_beta = np.zeros((self.N_q, self.J))
 
-                # Iterate through all different observable segments of gamma
-                dtheta_beta_seg = []
-                for theta_obs_seg in theta_obs:
-                    temp_dtheta = 0
-                    
-                    # theta_obs_ is a range where q_i is observable from gamma
-                    theta_start = theta_obs_seg[0]
-                    theta_stop = theta_obs_seg[1]
-                    
-                    # Covers all cases
-                    if (theta_stop < theta_start):
-                        if (theta_start < beta_stop):
-                            temp_dtheta += min([(beta_stop - beta_start),
-                                                (beta_stop - theta_start)])
-                        elif (theta_stop > beta_start):
-                            temp_dtheta += min([(beta_stop - beta_start),
-                                                (theta_stop - beta_start)])
-                    else:
-                        if ((theta_start < beta_stop) and (theta_stop > beta_start)):
-                            temp_dtheta += min([(theta_stop - beta_start),
-                                                (beta_stop - beta_start), 
-                                                (theta_stop - theta_start),
-                                                (beta_stop - theta_start)])
-                    dtheta_beta_seg.append(temp_dtheta)
-                dtheta_beta.append(dtheta_beta_seg)
-                beta_start = beta_stop
-            list_dtheta_beta.append(dtheta_beta)
-                
-        return np.array(list_dtheta_beta)
-    
-    
-    def calc_int_beta_edge2edge(self, list_theta_obs, list_beta):
-        """
-        Calculates the length of path overlapping with the basis functions 
-        from the end of observable segment to the end of the next segment.
-        theta_start and theta_stop represent the end of the first observable
-        segment and end of the target observable segment, respectively, where 
-        q_i is observable that is in list_beta[j:j+1]
-        """
-        list_dtheta_beta = []
+        # Iterate through POI to determine path in B and to the next POI
+        theta = 0
 
-        # Iterate through all points of interest and all combinations of segments
-        for ind_i, theta_obs in enumerate(list_theta_obs):
-            N_segs = len(theta_obs)
-            # Iterate through all combinations
-            dtheta_beta = []
-            for k in range(N_segs):
-                for b in range(N_segs):
-                    ind_start = (k - b - 1) % N_segs
-                    ind_stop = k
-                    # theta_obs_ is a range where q_i is observable from gamma
-                    theta_start = theta_obs[ind_start][1]
-                    theta_stop = theta_obs[ind_stop][1]
-                    
-                    beta_start = list_beta.item(0)
-                    # Iterate through all betas
-                    dtheta_beta_seg = []
-                    for ind_j in range(self.J):                
-                        if (ind_j == (len(list_beta) - 1)):
-                            beta_stop = self.L
-                        else:
-                            beta_stop = list_beta.item(ind_j+1)
-                        
-                        temp_dtheta = 0
-                        
-                        # Covers all cases
-                        if (theta_stop < theta_start):
-                            if (theta_start < beta_stop):
-                                temp_dtheta += min([(beta_stop - beta_start),
-                                                    (beta_stop - theta_start)])
-                            elif (theta_stop > beta_start):
-                                temp_dtheta += min([(beta_stop - beta_start),
-                                                    (theta_stop - beta_start)])
-                        elif (theta_stop > theta_start):
-                            if ((theta_start < beta_stop) and (theta_stop > beta_start)):
-                                temp_dtheta += min([(theta_stop - beta_start),
-                                                    (beta_stop - beta_start), 
-                                                    (theta_stop - theta_start),
-                                                    (beta_stop - theta_start)])
-                        else:
-                            # Condition means checking beta over entire loop
-                            temp_dtheta += (beta_stop - beta_start)
-                            
-                        dtheta_beta_seg.append(temp_dtheta)
-                        beta_start = beta_stop
-                    dtheta_beta.append(dtheta_beta_seg)
-            list_dtheta_beta.extend(dtheta_beta)
-                
-        return np.array(list_dtheta_beta)
-    
-    
-    def calc_movement(self):
-        """
-        Velocity depends on current position and movement that can be taken 
-        until next step
-        """
-        self.dtheta = 0
-        time_plan = 1/self.fs
-        ind_1 = np.argmin(self.v_controller[:,0] < self.theta)
-        ind_1 = (ind_1 - 1) % self.J
-        while (time_plan > 0):
-            ind_2 = (ind_1 + 1) % self.J
-            v_seg = 1/self.v_controller[ind_1, 1]
-            dist_seg = (self.v_controller[ind_2, 0] - (self.theta + self.dtheta)) % self.L
-            t_seg = (dist_seg / v_seg) # time to reach the next beta segment
-            if (t_seg >= time_plan):
-                self.dtheta += time_plan*v_seg
-                time_plan = 0
+        for ind_curr in range(len(self.list_q)):
+            theta_start = (theta - self.obs_rad) % self.L
+            theta_stop = (theta + self.obs_rad) % self.L
+
+            if (ind_curr == 0):
+                for ind_beta in range(self.J):
+                    if arr_beta_edges[ind_beta + 1] >= theta_start:
+                        arr_dtheta_beta[ind_curr, ind_beta] += np.min([arr_beta_edges[ind_beta + 1], self.L]) - np.max([arr_beta_edges[ind_beta], theta_start])
+                    elif arr_beta_edges[ind_beta] < theta_stop:
+                        arr_dtheta_beta[ind_curr, ind_beta] += np.min([arr_beta_edges[ind_beta + 1], theta_stop]) - np.max([arr_beta_edges[ind_beta], 0])
             else:
-                self.dtheta += dist_seg
-                time_plan -= t_seg
-                ind_1 = ind_2
+                for ind_beta in range(self.J):
+                    if (theta_start <= arr_beta_edges[ind_beta + 1] < theta_stop):
+                        arr_dtheta_beta[ind_curr, ind_beta] += np.min([arr_beta_edges[ind_beta + 1], theta_stop]) - np.max([arr_beta_edges[ind_beta], theta_start])
+                    elif (arr_beta_edges[ind_beta] < theta_stop) and (arr_beta_edges[ind_beta + 1] >= theta_stop):
+                        arr_dtheta_beta[ind_curr, ind_beta] += np.min([arr_beta_edges[ind_beta + 1], theta_stop]) - np.max([arr_beta_edges[ind_beta], theta_start])
+
+            ind_next = (ind_curr + 1) % len(self.list_q)
+            pos_curr = self.list_q[ind_curr]
+            pos_next = self.list_q[ind_next]
+            theta += np.sqrt(np.sum(np.power(pos_next - pos_curr, 2)))
+
+        return arr_dtheta_beta
+
+    def calc_beta_pos(self, arr_beta_edges):
+        """
+        Calculates the position of the start and stop of each beta segment
+        """
+        arr_beta_p = np.zeros((arr_beta_edges.shape[0], self.list_q.shape[1]))
+
+        # Iterate through POI to determine path in B and to the next POI
+        theta = 0
+
+        for ind_curr in range(len(self.list_q)):
+            theta_prev = theta
+
+            ind_next = (ind_curr + 1) % len(self.list_q)
+            pos_curr = self.list_q[ind_curr]
+            pos_next = self.list_q[ind_next]
+            pos_dout = pos_next - pos_curr
+            dist_dout = np.sqrt(np.sum(np.power(pos_dout, 2)))
+
+            theta = theta_prev + dist_dout
+
+            # linear interpolation between the points of interest
+            ind_inrange = np.where(np.logical_and(theta_prev <= arr_beta_edges, arr_beta_edges < theta))
+            alpha =  ((arr_beta_edges[ind_inrange] - theta_prev) / dist_dout).reshape(-1, 1) # value between 0 and 1
+            arr_beta_p[ind_inrange, :] = (1 - alpha)*pos_curr + alpha*pos_next
+
+        return arr_beta_p
 
 
 ####################       

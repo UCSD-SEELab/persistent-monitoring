@@ -18,7 +18,7 @@ import logging
 import numpy as np
 import csv
 from env_models import Model_Base
-from drones import Drone_Base, Drone_Ostertag2020, Drone_Constant, Drone_Ostertag2019
+from drones import Drone_Base, Drone_Ostertag2020, Drone_Constant, Drone_Ostertag2019, Drone_Smith2012
 from shapely.geometry import Polygon  # , LineString,  Point
 # from shapely.geometry.polygon import orient
 
@@ -324,7 +324,9 @@ if __name__ == '__main__':
         swarm_controller.add_drone(drone_type=Drone_Ostertag2020, drone_id='Drone2', b_verbose=b_verbose, b_logging=b_logging,
                                    cfg={'env_model': env_model, 'vmax':25, 'fs':2})
         swarm_controller.add_drone(drone_type=Drone_Ostertag2019, drone_id='Drone3', b_verbose=b_verbose, b_logging=b_logging,
-                                   cfg={'env_model': env_model, 'vmax':25, 'fs':2})
+                                    cfg={'env_model': env_model, 'vmax':25, 'fs':2})
+        swarm_controller.add_drone(drone_type=Drone_Smith2012, drone_id='Drone4', b_verbose=b_verbose, b_logging=b_logging,
+                                   cfg={'env_model': env_model, 'vmax': 25, 'fs': 2})
 
         # Everything is connected, initialize
         sim_env.init_sim()
