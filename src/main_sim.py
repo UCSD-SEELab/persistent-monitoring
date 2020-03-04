@@ -16,15 +16,15 @@ import sys
 import math
 import logging
 import numpy as np
-import csv
+import pickle as pkl
 from env_models import Model_Base, Model_Randomized
 from drones import Drone_Base, Drone_Ostertag2020, Drone_Constant, Drone_Ostertag2019, Drone_Smith2012
 from drones import Drone_Smith2012_Regions, Drone_Ostertag2019_Regions
-from shapely.geometry import Polygon  # , LineString,  Point
-# from shapely.geometry.polygon import orient
 
 import matplotlib.cm as colors
 import matplotlib.pyplot as plt
+
+from datetime import datetime
 
 ####################
 class Sim_Environment():
@@ -79,7 +79,6 @@ class Sim_Environment():
 
         if (self.b_swarm_controller):
             self.swarm_controller.set_env_model( self.env_model )
-            self.swarm_controller.calc_trajectory_init()
 
     def init_sim(self):
         """
@@ -107,33 +106,25 @@ class Sim_Environment():
 
         self.step_count += 1
 
-    def save_results(self, param_ros=0,
-                     param_covar_0_scale=0,
-                     param_v_max=0,
-                     param_n_obs=0,
-                     param_N_q=0,
-                     theta0=0):
+    def save_results(self, param_vmax, param_B):
         """
         Save the configuration results from the environmental model and the
         covariance results from the individual drones to a csv file
         """
-        list_config = self.env_model.get_config()
+        list_config = {'N_q': self.env_model.N_q, 'env_size': self.env_model.env_size, 'list_q':self.env_model.list_q,
+                       'covar_env': self.env_model.covar_env, 'vmax':param_vmax, 'amax':param_amax, 'jmax':param_jmax,
+                       'B':param_B}
         list_results = self.swarm_controller.get_results()
 
         np.set_printoptions(linewidth=1024, suppress=True)
 
-        filename_temp = '{0}_vmax{2:d}_V{3:d}_N{4:d}_ros{1:d}.csv'.format(
-            self.filename_results, math.trunc(param_ros),
-            math.trunc(param_v_max), math.trunc(param_n_obs),
-            math.trunc(param_N_q))
-        directory_save = '../results/'
+        filename = datetime.now().strftime('%Y%m%d_%H%M%S_Nq{0}_vmax{1}_B{2}.pkl'.format(self.env_model.N_q,
+                                                                                         param_vmax, param_B))
+        directory_save = os.path.join(os.path.dirname(os.path.realpath(__file__)), '../results/')
         if not os.path.exists(directory_save):
             os.makedirs(directory_save)
-        with open(directory_save + filename_temp, 'a', newline='') as fid:
-            writer = csv.writer(fid)
-            for result in list_results:
-                temp_row = list_config + [theta0] + list(result.flatten())
-                writer.writerow(temp_row)
+        with open(os.path.join(directory_save, filename), 'wb') as fid:
+            pkl.dump({'env':list_config, 'drone':None, 'results':list_results}, fid)
 
     def visualize(self):
         plt.clf()
@@ -233,7 +224,7 @@ class SwarmController():
         """
         Return results of the drone IDs and their covariance values
         """
-        return self.list_covar_max
+        return self.arr_covar
 
     def reset_drones(self, theta0, covar_0_scale=100):
         """
@@ -255,21 +246,24 @@ class SwarmController():
 Main control loop
 """
 if __name__ == '__main__':
-    """
     # arg parser
     parser = argparse.ArgumentParser()
     parser.add_argument('--vmax', type=float, default=30.0,
                         help='maximum velocity of drone')
-    parser.add_argument('--v', type=float, default=20.0,
+    parser.add_argument('--amax', type=float, default=200.0,
+                        help='maximum acceleration of drone')
+    parser.add_argument('--jmax', type=float, default=1000.0,
+                        help='maximum jerk of drone')
+    parser.add_argument('--B', type=float, default=10.0,
+                        help='radius of observation window')
+    parser.add_argument('--V', type=float, default=20.0,
                         help='noise in observation model')
-    parser.add_argument('--n', type=int, default=6,
+    parser.add_argument('--Nq', type=int, default=20,
                         help='number of points of interest (q)')
-    parser.add_argument('--Nsteps', type=int, default=600,
+    parser.add_argument('--Nsteps', type=int, default=1000,
                         help='number of simulation steps')
-    parser.add_argument('--Ntests', type=int, default=100,
+    parser.add_argument('--Ntests', type=int, default=10,
                         help='number of independent tests')
-    parser.add_argument('--Nrobust', type=int, default=1,
-                        help='number of repetitions at different initial positions')
     parser.add_argument('--verbose', action='store_true',
                         help='enables verbose output')
     parser.add_argument('--logging', action='store_true',
@@ -280,33 +274,23 @@ if __name__ == '__main__':
 
     N_steps = args.Nsteps
     N_drones = 1
-    env_size = [500, 500]
+    env_size = np.array([400, 400])
     step_size = 1  # 1 meter
-    step_time = 1  # 1 second
+    step_time = 0.1
+    steps_per_sample = 5
 
     N_tests = args.Ntests
-    N_robust = args.Nrobust
     param_ros = 1
     param_covar_0_scale = 100
-    param_v_max = args.vmax
-    param_n_obs = args.nobs
+    param_vmax = args.vmax
+    param_amax = args.amax
+    param_jmax = args.jmax
+    param_obs_rad = args.B
     param_N_q = args.Nq
 
     b_verbose = args.verbose
     b_logging = args.logging
     b_overlap = args.overlap
-    """
-
-    b_logging = False
-    b_verbose = True
-    N_tests = 1
-    step_size = 1
-    step_time = 0.1
-    steps_per_sample = 5
-
-    # env_model
-    env_size = np.array([100, 100])
-    param_N_q = 10
 
     if (b_logging):
         logger_filename = time.strftime('Log_%Y%m%d_%H%M%S.log', time.localtime())
@@ -325,8 +309,8 @@ if __name__ == '__main__':
 
         # Setup environmental model
         # env_model = Model_Base(env_size=env_size, step_size=step_size, N_q=param_N_q,
-        #                                       b_verbose=b_verbose, b_logging=b_logging)
-        env_model = Model_Randomized(env_size=env_size, step_size=step_size, N_q=param_N_q, B=10,
+        #                        b_verbose=b_verbose, b_logging=b_logging)
+        env_model = Model_Randomized(env_size=env_size, step_size=step_size, N_q=param_N_q, B=param_obs_rad,
                                      b_verbose=b_verbose, b_logging=b_logging)
         sim_env.set_env_model(env_model)
 
@@ -335,26 +319,30 @@ if __name__ == '__main__':
         # Set up swarm controller and drones to test
         swarm_controller = SwarmController(env_model=env_model, b_verbose=b_verbose, b_logging=b_logging)
         sim_env.set_swarm_controller(swarm_controller)
-        # swarm_controller.add_drone(drone_type=Drone_Constant, drone_id='Drone1', b_verbose=b_verbose, b_logging=b_logging,
-        #                            cfg={'env_model': env_model, 'vmax':25, 'fs':fs})
+        swarm_controller.add_drone(drone_type=Drone_Constant, drone_id='Drone1', b_verbose=b_verbose, b_logging=b_logging,
+                                   cfg={'env_model': env_model, 'vmax':param_vmax, 'amax':param_amax, 'jmax':param_jmax,
+                                        'fs':fs, 'obs_rad':param_obs_rad})
         swarm_controller.add_drone(drone_type=Drone_Ostertag2020, drone_id='Drone2', b_verbose=b_verbose, b_logging=b_logging,
-                                   cfg={'env_model': env_model, 'vmax':25, 'fs':fs})
+                                   cfg={'env_model': env_model, 'vmax':param_vmax, 'amax':param_amax, 'jmax':param_jmax,
+                                        'fs':fs, 'obs_rad':param_obs_rad})
         swarm_controller.add_drone(drone_type=Drone_Ostertag2019_Regions, drone_id='Drone3', b_verbose=b_verbose, b_logging=b_logging,
-                                   cfg={'env_model': env_model, 'vmax':25, 'fs':fs})
-        swarm_controller.add_drone(drone_type=Drone_Smith2012_Regions, drone_id='Drone4', b_verbose=b_verbose, b_logging=b_logging,
-                                   cfg={'env_model': env_model, 'vmax': 25, 'fs':fs})
+                                   cfg={'env_model': env_model, 'vmax':param_vmax, 'amax':param_amax, 'jmax':param_jmax,
+                                        'fs':fs, 'obs_rad':param_obs_rad})
+        swarm_controller.add_drone(drone_type=Drone_Smith2012, drone_id='Drone4', b_verbose=b_verbose, b_logging=b_logging,
+                                   cfg={'env_model': env_model, 'vmax': param_vmax, 'amax':param_amax, 'jmax':param_jmax,
+                                        'fs':fs, 'obs_rad':param_obs_rad})
 
         # Everything is connected, initialize
         sim_env.init_sim()
 
-        for ind in range(1000):
+        for ind in range(3000):
             sim_env.update()
 
             # Update visualization
-            # if ((ind_loop >= 2) and ((ind_loop % 5) == 0)):
-            #     sim_env.visualize()
             sim_env.visualize()
             time.sleep(0.001)
+
+        sim_env.save_results(param_vmax=param_vmax, param_B=param_obs_rad)
 
     if (b_logging):
         logging.shutdown()
