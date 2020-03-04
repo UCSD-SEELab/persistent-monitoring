@@ -13,13 +13,8 @@ import time
 import sys
 
 import math
-import logging
 import numpy as np
 from scipy import linalg
-from shapely.geometry import Polygon, LineString, LinearRing, MultiPoint, Point, MultiLineString
-from shapely.ops import unary_union, split, cascaded_union, snap, linemerge
-from shapely.affinity import translate
-import shapely
 
 # Saving out errors
 from datetime import datetime
@@ -27,15 +22,13 @@ import pickle as pkl
 
 from functools import partial
 
-# SymPy used for generating functions to solve for Ostertag Greedy KF 
-# implementation
-import sympy
-
 import matplotlib.cm as colors
 import matplotlib.pyplot as plt
 
-import pulp     # PuLP is a linear programming optimization library
-import cvxpy    # cvxpy is a convex optimization wrapper for different optimization tools
+import sympy  # SymPy used for generating functions to solve for Ostertag Greedy KF implementation
+import pulp                 # PuLP is a linear programming optimization library
+from mosek.fusion import *
+import mosek
 from concorde.tsp import TSPSolver
 
 from utility_func import *
@@ -1532,51 +1525,29 @@ class Drone_Ostertag2020(Drone_Base):
 
         self.drone_desc = 'Drone with minimum-time feasible B-spline trajectory'
 
-    def form_problem(self, m, d, b_slack=False):
+    def form_problem(self, m, t, q_pos, p_in, p_out, v_in, v_out, b_slack=False):
         """
         Forms and returns the formatted convex optimization problem and associated parameters
         """
+        dt = t / m
         m_valid = m + K_CONST + 1
-        dim_valid = d
 
-        # Form objective statement using B-spline with k = 3
-        # NOTE: c contains all of the control point locations for all dimensions. Each dimension is stacked so that c is
-        # a vector
-        c = cvxpy.Variable((m_valid, dim_valid))
-        gamma_v = cvxpy.Variable()
-        gamma_a = cvxpy.Variable()
-        gamma_j = cvxpy.Variable()
-        gamma_gamma = cvxpy.Variable()
+        M = Model('opt_formulation')
 
-        col = np.zeros(m_valid)
-        col[0], col[1], col[2], col[3] = -1, 3, -3, 1
-        row = np.zeros(m + 1)
-        row[0] = 1
-        A_ = linalg.toeplitz(col, row)
-        A = A_ @ A_.T
+        discount_gamma = 0.001
 
-        ## Form objective statement
-        J = 0
-        if b_slack:
-            # Minimize slack variables to check constraints
-            """
-            J += gamma_v
-            J += 0.01 * gamma_j
-            """
-            J += gamma_gamma
+        var_cx = M.variable('cx', m_valid, Domain.unbounded())
+        var_cy = M.variable('cy', m_valid, Domain.unbounded())
+        var_g = M.variable('g', 2, Domain.greaterThan(0.0))
+        val_gamma = M.variable('gamma', 4, Domain.unbounded())
+        var_dt = dt  # M.variable('dt', 1, Domain.equalsTo(dt))
+        var_dtinv = 1 / dt  # M.variable('dtinv', 1, Domain.equalsTo(1 / dt))
+        var_vmax = self.vmax
+        var_amax = self.amax
+        var_jmax = self.jmax
+        var_obj_scale = 100
 
-            J += 0.001 * gamma_a + 0.001 * gamma_j
-
-            # for ind_dim in range(dim_valid):
-            #     # J += (1 / param_dtau)**(2*K_CONST - 1) * cvxpy.quad_form(c[:, ind_dim], A) # Equivalent to c_dim.T @ A @ c_dim
-            #     J += 1 * cvxpy.quad_form(c[:, ind_dim], A)
-
-        else:
-            for ind_dim in range(dim_valid):
-                # J += (1 / param_dtau)**(2*K_CONST - 1) * cvxpy.quad_form(c[:, ind_dim], A) # Equivalent to c_dim.T @ A @ c_dim
-                J += cvxpy.quad_form(c[:, ind_dim], A)
-
-        # Configure constraints
+        # Create equality constraints for initial and final position, velocity, accel, and jerk
         #   0: s(0)     = p_in
         #   1: s(T)     = p_out
         #   2: s^(1)(0) = v_in
@@ -1587,20 +1558,6 @@ class Drone_Ostertag2020(Drone_Base):
         #   7: s^(3)(T) = 0
         D = np.zeros((8, m_valid))
 
-        # Define parameters for disciplined convex programming
-        param_b = cvxpy.Parameter((8, dim_valid))
-        param_B = cvxpy.Parameter(nonneg=True)
-        param_q = cvxpy.Parameter((dim_valid,))
-        param_dtau = cvxpy.Parameter(nonneg=True)
-        param_vmax = cvxpy.Parameter(nonneg=True)
-        param_amax = cvxpy.Parameter(nonneg=True)
-        param_jmax = cvxpy.Parameter(nonneg=True)
-
-        # Condition on slack variable
-        # st = [gamma >= 0]
-        st = []
-
-        # Equality Constraints for enter/exit conditions
         # Position: s(0) and s(T)
         D[0, :3] = [1 / 6, 2 / 3, 1 / 6]
         D[1, -4:-1] = [1 / 6, 2 / 3, 1 / 6]
@@ -1617,61 +1574,121 @@ class Drone_Ostertag2020(Drone_Base):
         D[6, :4] = np.array([-1, 3, -3, 1])
         D[7, -4:] = np.array([-1, 3, -3, 1])
 
-        st_eq = D @ c == param_b
-        st += [st_eq]
+        M.constraint('st_s_px0', Expr.dot(D[0, :], var_cx), Domain.equalsTo(p_in[0]))
+        M.constraint('st_s_pxT', Expr.dot(D[1, :], var_cx), Domain.equalsTo(p_out[0]))
+        M.constraint('st_s_vx0', Expr.dot(D[2, :], var_cx), Domain.equalsTo(v_in[0] * var_dt))
+        M.constraint('st_s_vxT', Expr.dot(D[3, :], var_cx), Domain.equalsTo(v_out[0] * var_dt))
+        M.constraint('st_s_ax0', Expr.dot(D[4, :], var_cx), Domain.equalsTo(0.0))
+        M.constraint('st_s_axT', Expr.dot(D[5, :], var_cx), Domain.equalsTo(0.0))
+        M.constraint('st_s_jx0', Expr.dot(D[6, :], var_cx), Domain.equalsTo(0.0))
+        M.constraint('st_s_jxT', Expr.dot(D[7, :], var_cx), Domain.equalsTo(0.0))
 
-        # Inequality Constraints for remaining in S_free
-        # Constraints on location, velocity, and acceleration
-        c_imp_p = c[(K_CONST - 1):(m + K_CONST - 2), :dim_valid]
-        for _c in c_imp_p:
-            st += [cvxpy.sum((_c - param_q) ** 2) <= param_B ** 2]
+        M.constraint('st_s_py0', Expr.dot(D[0, :], var_cy), Domain.equalsTo(p_in[1]))
+        M.constraint('st_s_pyT', Expr.dot(D[1, :], var_cy), Domain.equalsTo(p_out[1]))
+        M.constraint('st_s_vy0', Expr.dot(D[2, :], var_cy), Domain.equalsTo(v_in[1] * var_dt))
+        M.constraint('st_s_vyT', Expr.dot(D[3, :], var_cy), Domain.equalsTo(v_out[1] * var_dt))
+        M.constraint('st_s_ay0', Expr.dot(D[4, :], var_cy), Domain.equalsTo(0.0))
+        M.constraint('st_s_ayT', Expr.dot(D[5, :], var_cy), Domain.equalsTo(0.0))
+        M.constraint('st_s_jy0', Expr.dot(D[6, :], var_cy), Domain.equalsTo(0.0))
+        M.constraint('st_s_jyT', Expr.dot(D[7, :], var_cy), Domain.equalsTo(0.0))
+
+        # Create inequality constraints on location, velocity, and acceleration for remaining in S_free
+        # Position
+        c_p_range = (K_CONST - 1, m + K_CONST - 2)
+        M.constraint('st_s_pfree',
+                     Expr.hstack(Expr.mul(self.obs_rad, Expr.ones(c_p_range[1] - c_p_range[0])),
+                                 Expr.sub(var_cx.slice(c_p_range[0], c_p_range[1]), q_pos[0]),
+                                 Expr.sub(var_cy.slice(c_p_range[0], c_p_range[1]), q_pos[1])),
+                     Domain.inQCone())
 
         # Velocity
-        # c_v_{i} = c_{i} - c_{i-1}
-        for ind_i in range(K_CONST - 1, m + K_CONST - 2):
-            _c_v = (c[ind_i, :dim_valid] - c[ind_i - 1, :dim_valid]) / param_dtau
-            st += [cvxpy.sum(_c_v ** 2) - gamma_v <= param_vmax ** 2]
-
-        # Accleration
-        # c_v_{i} = c_{i} - 2*c_{i-1} + c_{i-2}
-        for ind_i in range(K_CONST - 1, m + K_CONST - 1):
-            _c_a = (c[ind_i, :dim_valid] - 2 * c[ind_i - 1, :dim_valid] + c[ind_i - 2, :dim_valid]) / param_dtau ** 2
-            st += [cvxpy.sum(_c_a ** 2) - gamma_a <= param_amax ** 2]
-
-        # Jerk
-        # c_v_{i} = c_{i} - 3*c_{i-1} + 3*c_{i-2} - c_{i-3}
-        for ind_i in range(K_CONST, m + K_CONST):
-            _c_j = (c[ind_i, :dim_valid] - 3 * c[ind_i - 1, :dim_valid] + 3 * c[ind_i - 2, :dim_valid] - c[ind_i - 3,
-                                                                                                         :dim_valid]) / param_dtau ** 3
-            st += [cvxpy.sum(_c_j ** 2) - gamma_j <= param_jmax ** 2]
+        c_v_range = (K_CONST - 1, m + K_CONST - 3)
+        col = np.zeros(m_valid)
+        col[0] = -1
+        row = np.zeros(m_valid)
+        row[0], row[1] = -1, 1
+        c_v_mat = linalg.toeplitz(col, row)
+        c_v_mat = c_v_mat[c_v_range[0]:c_v_range[1], :] / (var_vmax * var_dt)
 
         if b_slack:
-            # Max norm of slack
-            st += [gamma_v / param_vmax ** 2 <= gamma_gamma,
-                   gamma_a / param_amax ** 2 <= gamma_gamma,
-                   gamma_j / param_jmax ** 2 <= gamma_gamma]
+            M.constraint('st_s_vfree',
+                         Expr.hstack([Var.vrepeat(val_gamma.index(1), c_v_range[1] - c_v_range[0]),
+                                      Expr.mul(c_v_mat, var_cx),
+                                      Expr.mul(c_v_mat, var_cy)]),
+                         Domain.inQCone())
         else:
-            gamma_v.value = 0
-            gamma_a.value = 0
-            gamma_j.value = 0
+            M.constraint('st_s_vfree',
+                         Expr.hstack([Expr.ones(c_v_range[1] - c_v_range[0]),
+                                      Expr.mul(c_v_mat, var_cx),
+                                      Expr.mul(c_v_mat, var_cy)]),
+                         Domain.inQCone())
 
-        opt_prob = cvxpy.Problem(cvxpy.Minimize(J), st)
-        prob_vars = {'c': c,
-                'gamma_v': gamma_v,
-                'gamma_a': gamma_a,
-                'gamma_j': gamma_j,
-                'gamma': gamma_gamma
-                }
-        prob_params = {'b': param_b,
-                  'B': param_B,
-                  'q': param_q,
-                  'dtau': param_dtau,
-                  'vmax': param_vmax,
-                  'amax': param_amax,
-                  'jmax': param_jmax
-                  }
+        # Acceleration
+        c_a_range = (K_CONST - 2, m + K_CONST - 3)
+        col = np.zeros(m_valid)
+        col[0] = 1
+        row = np.zeros(m_valid)
+        row[0], row[1], row[2] = 1, -2, 1
+        c_a_mat = linalg.toeplitz(col, row)
+        c_a_mat = c_a_mat[c_a_range[0]:c_a_range[1], :] / (var_amax * var_dt ** 2)
 
-        return opt_prob, prob_params, prob_vars
+        if b_slack:
+            M.constraint('st_s_afree',
+                         Expr.hstack([Var.vrepeat(val_gamma.index(2), c_a_range[1] - c_a_range[0]),
+                                      Expr.mul(c_a_mat, var_cx),
+                                      Expr.mul(c_a_mat, var_cy)]),
+                         Domain.inQCone())
+        else:
+            M.constraint('st_s_afree',
+                         Expr.hstack([Expr.ones(c_a_range[1] - c_a_range[0]),
+                                      Expr.mul(c_a_mat, var_cx),
+                                      Expr.mul(c_a_mat, var_cy)]),
+                         Domain.inQCone())
+
+        # Jerk
+        c_j_range = (K_CONST - 2, m + K_CONST - 3)
+        col = np.zeros(m_valid)
+        col[0] = -1
+        row = np.zeros(m_valid)
+        row[0], row[1], row[2], row[3] = -1, 3, -3, 1
+        c_j_mat = linalg.toeplitz(col, row)
+        c_j_mat = c_j_mat[c_j_range[0]:c_j_range[1], :] / (var_jmax * var_dt ** 3)
+
+        if b_slack:
+            M.constraint('st_s_jfree',
+                         Expr.hstack([Var.vrepeat(val_gamma.index(3), c_j_range[1] - c_j_range[0]),
+                                      Expr.mul(c_j_mat, var_cx),
+                                      Expr.mul(c_j_mat, var_cy)]),
+                         Domain.inQCone())
+        else:
+            M.constraint('st_s_jfree',
+                         Expr.hstack([Expr.ones(c_j_range[1] - c_j_range[0]),
+                                      Expr.mul(c_j_mat, var_cx),
+                                      Expr.mul(c_j_mat, var_cy)]),
+                         Domain.inQCone())
+
+        # Set the objective function
+        col = np.zeros(m_valid)
+        col[0], col[1], col[2], col[3] = -1, 3, -3, 1
+        row = np.zeros(m + 1)
+        row[0] = 1
+        A = linalg.toeplitz(col, row) * var_obj_scale
+
+        if b_slack:
+            # gamma[0] should be max of all gammas
+            M.constraint('st_gammas', Expr.sub(Var.vrepeat(val_gamma.index(0), 3), val_gamma.slice(1, 4)),
+                         Domain.greaterThan(0.0))
+
+            M.objective('obj_slack', ObjectiveSense.Minimize,
+                        Expr.mul(
+                            Expr.add(val_gamma.index(0), Expr.mul(discount_gamma, Expr.sum(val_gamma.slice(2, 4)))),
+                            100))
+        else:
+            M.constraint('st_objxcone', Expr.vstack(var_g.index(0), 1, Expr.mul(A.T, var_cx)), Domain.inRotatedQCone())
+            M.constraint('st_objycone', Expr.vstack(var_g.index(1), 1, Expr.mul(A.T, var_cy)), Domain.inRotatedQCone())
+            M.objective('obj', ObjectiveSense.Minimize, Expr.sum(var_g))
+
+        return M
 
     def opt_bst(self, q_pos, p_in, p_out, v_in, v_out, T_min):
         """
@@ -1684,26 +1701,17 @@ class Drone_Ostertag2020(Drone_Base):
         print('v_out = {0}'.format(v_out))
 
         dim_valid = min([q_pos.shape[-1], p_in.shape[-1], p_out.shape[-1], v_in.shape[-1], v_out.shape[-1]])
-        m = np.floor(T_min * self.fu).astype(int)
-
-        opt_prob, prob_params, prob_vars = self.form_problem(m, dim_valid, b_slack=True)
-
-        # Input values for parameters
-        prob_params['q'].value = q_pos
-        prob_params['B'].value = self.obs_rad
-        prob_params['vmax'].value = self.vmax
-        prob_params['amax'].value = self.amax
-        prob_params['jmax'].value = self.jmax
+        m = np.min([np.floor(T_min * self.fu).astype(int), 20])
 
         # TODO Implement more intelligent search method
-        stop_gammatol = 0.01
+        stop_gammatol = 1.001
         stop_ttol = 0.05
         maxiter = 50
         smallstep = 1.05
         backstep = 1 / (smallstep)**(1/5)
         barr_valid = np.zeros(maxiter)
         barr_smallstep = np.ones(maxiter)
-        barr_solverfailed = np.zeros(maxiter)
+        barr_infeasible = np.zeros(maxiter)
         arr_t = np.zeros(maxiter)
         arr_gamma = np.zeros(maxiter)
         arr_gamma_v = np.zeros(maxiter)
@@ -1718,60 +1726,94 @@ class Drone_Ostertag2020(Drone_Base):
         # Initial
         arr_t[0] = T_min
         barr_smallstep[0] = 0
+        b_slack = True
 
         for ind in range(0, maxiter-1):
             t = arr_t[ind]
+            m = np.min([np.floor(t * self.fu).astype(int), 10])
 
-            # Set knot spacing parameters
-            dt = t / m
-            prob_params['dtau'].value = dt
-
-            b = np.zeros((8, dim_valid))
-            b[0, :] = p_in[:dim_valid]
-            b[1, :] = p_out[:dim_valid]
-            b[2, :] = v_in[:dim_valid] * dt
-            b[3, :] = v_out[:dim_valid] * dt
-            prob_params['b'].value = b
+            model_opt_prob = self.form_problem(m, t, q_pos, p_in, p_out, v_in, v_out, b_slack=b_slack)
 
             if self.b_verbose:
                 print('--SLACK--')
                 print('  t:  {0:0.4f}'.format(t))
                 print('  m:   {0:d}'.format(m))
-                print('  dt:  {0:0.4f}'.format(dt))
-            try:
-                trun_start = time.process_time()
-                opt_prob.solve(solver=cvxpy.MOSEK) #, verbose=True) # if issue
-                trun_end = time.process_time()
-                if self.b_verbose:
-                    print('  proc: {0:0.2f} ms'.format(1000*(trun_end - trun_start)))
-            except:
-                barr_solverfailed[ind] = 1
-                print('  Solver failed')
+                print('  dt:  {0:0.4f}'.format(t / m))
 
-            if not(barr_solverfailed[ind]):
-                slack_max = np.sign(prob_vars['gamma'].value)*np.sqrt(np.abs(prob_vars['gamma'].value))
-                slack_v = np.sign(prob_vars['gamma_v'].value)*np.sqrt(np.abs(prob_vars['gamma_v'].value))
-                slack_a = np.sign(prob_vars['gamma_a'].value)*np.sqrt(np.abs(prob_vars['gamma_a'].value))
-                slack_j = np.sign(prob_vars['gamma_j'].value)*np.sqrt(np.abs(prob_vars['gamma_j'].value))
+            try:
+                # model_opt_prob.setLogHandler(sys.stdout) # uncomment if issue
+                trun_start = time.process_time()
+                model_opt_prob.solve()
+                trun_end = time.process_time()
+
+                probstatus = model_opt_prob.getProblemStatus()
+
+                if probstatus == ProblemStatus.PrimalAndDualFeasible:
+                    print('  Optimization success')
+                    barr_infeasible[ind] = 0
+                elif probstatus == ProblemStatus.PrimalInfeasible:
+                    print('  Primal infeasibility certificate found.')
+                    barr_infeasible[ind] = 1
+                elif probstatus == ProblemStatus.DualInfeasible:
+                    print('  Dual infeasibility certificate found.')
+                    barr_infeasible[ind] = 1
+                elif probstatus == ProblemStatus.Unknown:
+                    print('  Solver uncertain. Likely infeasible.')
+                    symname, desc = mosek.Env.getcodedesc(mosek.rescode(int(model_opt_prob.getSolverIntInfo('optimizeResponse'))))
+                    print('  Termination code: {0} {1}'.format(symname, desc))
+                    barr_infeasible[ind] = 1
+                else:
+                    print('Optimization issue ({0})'.format(probstatus))
+                    barr_infeasible[ind] = 1
+
+                if self.b_verbose:
+                    print('  texternal: {0:0.2f} ms'.format(1000 * (trun_end - trun_start)))
+                    print('  tinternal: {0:0.2f} ms'.format(1000 * model_opt_prob.getSolverDoubleInfo('optimizerTime')))
+                    print('  pval: {0}'.format(model_opt_prob.primalObjValue()))
+                    print('  dval: {0}'.format(model_opt_prob.dualObjValue()))
+
+            except OptimizeError as e:
+                print("Optimization failed. Error: {0}".format(e))
+                barr_infeasible[ind] = 1
+
+            except SolutionError as e:
+                probstatus = model_opt_prob.getProblemStatus()
+
+                if probstatus == ProblemStatus.PrimalInfeasible:
+                    print('  Primal infeasibility certificate found.')
+                    barr_infeasible[ind] = 1
+                elif probstatus == ProblemStatus.DualInfeasible:
+                    print('  Dual infeasibility certificate found.')
+                    barr_infeasible[ind] = 1
+                elif probstatus == ProblemStatus.Unknown:
+                    print('  Solver uncertain. Likely infeasible.')
+                    symname, desc = mosek.Env.getcodedesc(
+                        mosek.rescode(int(model_opt_prob.getSolverIntInfo('optimizeResponse'))))
+                    print('  Termination code: {0} {1}'.format(symname, desc))
+                    barr_infeasible[ind] = 1
+                else:
+                    print('Optimization issue ({0})'.format(probstatus))
+                    barr_infeasible[ind] = 1
+
+            if not(barr_infeasible[ind]) and b_slack:
+                val_gamma = model_opt_prob.getVariable('gamma').level()
+                slack_max = val_gamma[0]
+                slack_v = val_gamma[1]
+                slack_a = val_gamma[2]
+                slack_j = val_gamma[3]
                 arr_gamma[ind] = slack_max
                 arr_gamma_v[ind] = slack_v
                 arr_gamma_a[ind] = slack_a
                 arr_gamma_j[ind] = slack_j
 
-                if (opt_prob.status == 'optimal'):
+                if self.b_verbose:
                     print('  ovr: {0:0.4f}'.format(slack_max))
                     print('  vel: {0:0.4f}'.format(slack_v))
                     print('  acc: {0:0.4f}'.format(slack_a))
                     print('  jer: {0:0.4f}'.format(slack_j))
-                else:
-                    barr_solverfailed[ind] = 1
-                    print('  Optimization did not converge')
-                    debug_data, debug_chain, debug_invdata = opt_prob.get_problem_data(cvxpy.MOSEK)
-                    print('  Status: ', opt_prob.status)
 
             # Adjust t based on little-big jumps
             # Little jumps are used to approximate derivative, big jump uses the derivative to explore larger space
-
             """
             if big jump
                 if invalid
@@ -1794,9 +1836,13 @@ class Drone_Ostertag2020(Drone_Base):
                 
             if solver failed
                 try again with small jump
+            
+            if back search
+                set up problem for final solution search
+                generate solution
             """
 
-            if barr_solverfailed[ind]:
+            if barr_infeasible[ind]:
                 if b_forward:
                     arr_t[ind+1] = t * smallstep
                     barr_smallstep[ind+1] = 1
@@ -1810,32 +1856,48 @@ class Drone_Ostertag2020(Drone_Base):
                     # TODO Make smarter back search
                     if (ind_t_best == -1) or (arr_t[ind_t_best] > t):
                         ind_t_best = ind
-                        arr_c_best = prob_vars['c'].value
+                        val_cx = model_opt_prob.getVariable('cx').level()
+                        val_cy = model_opt_prob.getVariable('cy').level()
+                        arr_c_best = np.column_stack((val_cx, val_cy))
                         m_best = m
                         dt_best = t / m
 
-                    barr_valid[ind] = 1
-                    b_forward = False
+                        # Transition to absolute search
+                        b_slack = False
 
                     if t == T_min:
                         print('    result valid. t = T_min = {0:0.3f}'.format(arr_t[ind]))
                         break
+
+                    elif b_forward:
+                        # Switch problem from slack search to final solution
+                        # m = np.floor(arr_t[ind] * self.fu).astype(int)
+                        # opt_prob, prob_params, prob_vars = self.form_problem(m, dim_valid, b_slack=True)
+                        b_forward = False
+                        arr_t[ind+1] = t
+                        print('    result valid. switching to final form with t = {0:0.3f}'.format(arr_t[ind+1]))
+
                     else:
-                        arr_t[ind+1] = t * backstep
+                        b_forward = False
+                        arr_t[ind + 1] = t * backstep
                         print('    result valid. back step to t = {0:0.3f}'.format(arr_t[ind+1]))
+
+                    barr_valid[ind] = 1
+
                 else:
                     if not(b_forward):
                         print('    result invalid. use previous best of t = {0:0.3f}'.format(arr_t[ind_t_best]))
                         break
-                    if barr_smallstep[ind]:
+
+                    if barr_smallstep[ind] and any(np.logical_not(barr_infeasible[:ind])):
                         # Do big step
-                        ind_prev = np.max(np.where(np.logical_and(np.logical_not(barr_smallstep), np.logical_not(barr_solverfailed))))
+                        ind_prev = np.max(np.where(np.logical_not(barr_infeasible[:ind])))
                         t_prev = arr_t[ind_prev]
                         t_curr = arr_t[ind]
                         val_prev = arr_gamma[ind_prev]
                         val_curr = arr_gamma[ind]
                         val_slope = (val_curr - val_prev) / (t_curr - t_prev)
-                        t_int = t_curr - val_curr / val_slope
+                        t_int = t_curr - (val_curr - 1) / val_slope
                         arr_t[ind+1] = t_int
                         barr_smallstep[ind+1] = 0
                         print('    result invalid. big step to t = {0:0.3f}'.format(arr_t[ind+1]))
@@ -1846,6 +1908,8 @@ class Drone_Ostertag2020(Drone_Base):
                         arr_t[ind+1] = t * smallstep
                         barr_smallstep[ind+1] = 1
                         print('    result invalid. small step to t = {0:0.3f}'.format(arr_t[ind+1]))
+
+            model_opt_prob.dispose()
 
         return arr_c_best, m_best, dt_best
 
