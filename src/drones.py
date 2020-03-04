@@ -624,8 +624,9 @@ class Drone_Constant(Drone_Base):
         temp_s_p1 = np.array(self.list_q)
         temp_s_p2 = np.roll(temp_s_p1, -1, axis=0)
         s_p_dist = np.sqrt(
-            np.sum(np.power(temp_s_p1 - np.append([temp_s_p1[-1, :]], temp_s_p1[:-1, :], axis=0), 2), axis=1))
-        s_t2 = np.cumsum(s_p_dist / self.vmax)
+            np.sum(np.power(temp_s_p2 - temp_s_p1, 2), axis=1))
+        s_t = s_p_dist / self.vmax
+        s_t2 = np.cumsum(s_t)
         s_t1 = np.roll(s_t2, 1, axis=0)
         s_t1[0] = 0
 
@@ -1310,6 +1311,8 @@ class Drone_Ostertag2019(Drone_Base):
             ind_inrange = np.where(np.logical_and(theta_prev <= arr_beta_edges, arr_beta_edges <= theta))
             alpha =  ((arr_beta_edges[ind_inrange] - theta_prev) / dist_dout).reshape(-1, 1) # value between 0 and 1
             arr_beta_p[ind_inrange, :] = (1 - alpha)*pos_curr + alpha*pos_next
+
+        arr_beta_p[-1, :] = arr_beta_p[0, :]
 
         return arr_beta_p
 
