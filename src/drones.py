@@ -221,7 +221,7 @@ class Drone_Base():
 
         # Generate Kalman filter steady state equations that need to be solved
         # for each iteration of the loop
-        kf_depth = 6
+        kf_depth = 8
 
         if (self.list_kf_eqs is None):
             self.list_kf_eqs = generate_func_kfsteadystate(depth=kf_depth)
@@ -1709,9 +1709,9 @@ class Drone_Ostertag2020(Drone_Base):
         # TODO Implement more intelligent search method
         stop_gammatol = 1.001
         stop_ttol = 0.05
-        maxiter = 50
+        maxiter = 100
         smallstep = 1.05
-        backstep = 1 / (smallstep)**(1/5)
+        backstep = 1 / (smallstep)**(1/10)
         barr_valid = np.zeros(maxiter)
         barr_smallstep = np.ones(maxiter)
         barr_infeasible = np.zeros(maxiter)
@@ -1726,6 +1726,9 @@ class Drone_Ostertag2020(Drone_Base):
         dt_best = T_min / m
         ind_t_best = -1
 
+        c_stopsoon = 0
+        STEPS_B_BEYOND = 2
+
         # Initial
         arr_t[0] = T_min
         barr_smallstep[0] = 0
@@ -1733,7 +1736,7 @@ class Drone_Ostertag2020(Drone_Base):
 
         for ind in range(0, maxiter-1):
             t = arr_t[ind]
-            m = np.min([np.floor(t * self.fu).astype(int), 10])
+            m = np.max( [np.min([np.floor(t * self.fu).astype(int), 12]), 80] )
 
             model_opt_prob = self.form_problem(m, t, q_pos, p_in, p_out, v_in, v_out, b_slack=b_slack)
 
@@ -1815,6 +1818,54 @@ class Drone_Ostertag2020(Drone_Base):
                     print('  acc: {0:0.4f}'.format(slack_a))
                     print('  jer: {0:0.4f}'.format(slack_j))
 
+            # Brute force log search
+            if barr_infeasible[ind]:
+                if b_forward:
+                    arr_t[ind + 1] = t * smallstep
+                    print('    solver failed. forward step to t = {0:0.3f}'.format(arr_t[ind + 1]))
+                elif (c_stopsoon < STEPS_B_BEYOND) and (ind_t_best == -1):
+                    arr_t[ind + 1] = t * smallstep
+                    print('    solver failed. no valid solution. continue forward to t = {0:0.3f}'.format(arr_t[ind + 1]))
+                elif c_stopsoon < STEPS_B_BEYOND:
+                    arr_t[ind + 1] = t * backstep
+                    c_stopsoon += 1
+                    print('    solver failed. continue back to t = {0:0.3f}'.format(arr_t[ind + 1]))
+                else:
+                    print('    solver failed. search complete. use previous best of t = {0:0.3f}'.format(arr_t[ind_t_best]))
+                    break
+            else:
+                if slack_max <= stop_gammatol:
+                    if ((ind_t_best == -1) or (t < arr_t[ind_t_best])) and not(b_slack):
+                        ind_t_best = ind
+                        val_cx = model_opt_prob.getVariable('cx').level()
+                        val_cy = model_opt_prob.getVariable('cy').level()
+                        arr_c_best = np.column_stack((val_cx, val_cy))
+                        m_best = m
+                        dt_best = t / m
+
+                        if t <= T_min:
+                            print('    result valid. t = T_min = {0:0.3f}'.format(arr_t[ind]))
+                            break
+
+                    if b_forward:
+                        arr_t[ind + 1] = arr_t[ind]
+                        b_forward = False
+                        b_slack = False
+                        print('    result valid. switching to final form with t = {0:0.3f}'.format(arr_t[ind+1]))
+                    elif c_stopsoon < STEPS_B_BEYOND:
+                        arr_t[ind + 1] = t * backstep
+                        print('    result valid. continue back step to t = {0:0.3f}'.format(arr_t[ind + 1]))
+                    else:
+                        print('    result valid. search complete. use previous best of t = {0:0.3f}'.format(arr_t[ind_t_best]))
+                        break
+                else:
+                    if b_forward:
+                        arr_t[ind + 1] = t * smallstep
+                        print('    result invalid. forward step to t = {0:0.3f}'.format(arr_t[ind+1]))
+                    elif (ind_t_best == -1):
+                        arr_t[ind + 1] = t * smallstep
+                        print('    result invalid. no valid solution. forward step to t = {0:0.3f}'.format(arr_t[ind+1]))
+
             # Adjust t based on little-big jumps
             # Little jumps are used to approximate derivative, big jump uses the derivative to explore larger space
             """
@@ -1844,7 +1895,8 @@ class Drone_Ostertag2020(Drone_Base):
                 set up problem for final solution search
                 generate solution
             """
-
+            """
+            TODO: Update method to be more robust to non-convergence
             if barr_infeasible[ind]:
                 if b_forward:
                     arr_t[ind+1] = t * smallstep
@@ -1911,8 +1963,13 @@ class Drone_Ostertag2020(Drone_Base):
                         arr_t[ind+1] = t * smallstep
                         barr_smallstep[ind+1] = 1
                         print('    result invalid. small step to t = {0:0.3f}'.format(arr_t[ind+1]))
+            """
 
             model_opt_prob.dispose()
+
+        # If no solution was found, throw an exception
+        if (ind_t_best == -1):
+            raise Exception('Unable to solve')
 
         return arr_c_best, m_best, dt_best
 
