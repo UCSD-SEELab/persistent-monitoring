@@ -253,6 +253,8 @@ class Model_Randomized(Model_Base):
                 if all(xy_valid == False):
                     break
 
+        print('Locations remaining: {0:0.2f}%'.format(100 *np.sum(xy_valid) / np.product(self.env_size)))
+
         self.list_q = arr_q
 
         self.covar_env = np.diag((2*np.random.random(size=self.N_q))**2)
@@ -262,18 +264,23 @@ class Model_Randomized(Model_Base):
 Test functionality by generating and plotting an environment
 """
 if __name__ == '__main__':
-    test_env = Model_Base(env_size=np.array([300, 300]), N_q=10, step_size=1,
-                 b_terrain=True, b_verbose=False, b_logging=False)
+    list_N_q = [10, 20, 40, 60, 80, 100]
+    n_iter = 3
 
-    tempx, tempy = np.meshgrid(range(test_env.env_size[0]), range(test_env.env_size[1]))
+    for N_q in list_N_q:
+        for _ in range(n_iter):
+            test_env = Model_Randomized(env_size=np.array([450, 450]), N_q=N_q, step_size=1,
+                         b_terrain=False, b_verbose=False, b_logging=False, B=10)
 
-    plt.figure(1)
-    plt.subplot(111)
-    plt.pcolor(tempx, tempy, test_env.map_terrain,
-               cmap='Greens_r')  # Can use 'terrain' colormap once elevation is normalized
-    # plt.colorbar()
+            #tempx, tempy = np.meshgrid(range(test_env.env_size[0]), range(test_env.env_size[1]))
+            plt.figure(1)
+            plt.subplot(111)
+            # plt.pcolor(tempx, tempy, test_env.map_terrain,
+            #            cmap='Greens_r')  # Can use 'terrain' colormap once elevation is normalized
+            # plt.colorbar()
+            plt.title('{0:2d} POI'.format(N_q))
 
-    test_env.visualize()
-    plt.show()
+            test_env.visualize()
+            plt.show()
 
     print(' ')
