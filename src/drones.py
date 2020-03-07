@@ -332,10 +332,12 @@ class Drone_Base():
                 self.logger.debug('H = ' + np.array2string(np.zeros((self.N_q,1)).flatten(), separator=', ', formatter={'int_kind':lambda x: '{0:1d}'.format(x)}, max_line_width=2148))
         
         if (self.b_verbose):
+            """
             print('Drone {0}'.format(self.drone_id))
             print('  t = {0:0.2f}'.format(self.t_prev))
             print('  pos = ({0:0.2f}, {1:0.2f})'.format(self.s_p[0], self.s_p[1]))
             print('  vel = ({0:0.2f}, {1:0.2f})'.format(self.s_v[0], self.s_v[1]))
+            """
 
     def calc_path_length(self, loop_path):
         """
@@ -1740,7 +1742,7 @@ class Drone_Ostertag2020(Drone_Base):
 
         for ind in range(0, maxiter-1):
             t = arr_t[ind]
-            m = np.max( [np.min([np.floor(t * self.fu).astype(int), 12]), 80] )
+            m = np.max( [np.min([np.floor(t * self.fu).astype(int), 12]), 60] )
 
             model_opt_prob = self.form_problem(m, t, q_pos, p_in, p_out, v_in, v_out, b_slack=b_slack)
 
@@ -2073,9 +2075,11 @@ class Drone_Ostertag2020(Drone_Base):
         # Initial trajectory calculation for d_i = 1 for all i to seed the Greedy Knockdown Algorithm
         self.list_traj = self.calc_control_points(np.ones(self.N_q) / self.fs)
         arr_T_obs, T_notobs = self.split_T_obs(self.list_traj)
+        # Save original observation times as minimum feasible times
+        arr_T_obs_min = arr_T_obs[:]
 
         # Greedy Knockdown to calculate optimal number of observations
-        self.list_d = self.greedy_knockdown_algorithm(arr_T_obs, T_notobs)
+        self.list_d = self.greedy_knockdown_algorithm(arr_T_obs_min, T_notobs)
         list_d_prev = np.ones(self.list_d.shape)
         while not(all(self.list_d == list_d_prev)):
             # Determine which points have had a changed number of observations
@@ -2083,7 +2087,7 @@ class Drone_Ostertag2020(Drone_Base):
             list_d_prev = self.list_d[:]
             self.list_traj = self.calc_control_points(list_d_prev / self.fs, b_calc=arr_b_recalc)
             arr_T_obs, T_notobs = self.split_T_obs(self.list_traj)
-            self.list_d = self.greedy_knockdown_algorithm(arr_T_obs, T_notobs)
+            self.list_d = self.greedy_knockdown_algorithm(arr_T_obs_min, T_notobs)
 
         self.create_s_function_map()
 
