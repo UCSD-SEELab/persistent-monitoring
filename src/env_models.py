@@ -13,10 +13,6 @@ import time
 import math
 import logging
 import numpy as np
-from shapely.geometry import Polygon, MultiPolygon, LinearRing, LineString, Point, MultiPoint
-from shapely.ops import unary_union
-from matplotlib.path import Path
-import csv
 
 import matplotlib.cm as colors
 import matplotlib.pyplot as plt
