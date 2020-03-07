@@ -365,11 +365,14 @@ class Drone_Base():
         s_j = s_funcs[5](t_mod)
 
         if any(s_p != s_p):
-            filename = datetime.now().strftime('traj_error_%Y%m%d_%H%M%S.pkl')
-            directory_save = os.path.join(os.path.dirname(os.path.realpath(__file__)), '../results')
-            print(' traj_error. Saving pickle file ({0})'.format(filename))
-            pkl.dump({'s_funcs':s_funcs, 't':t, 't_mod':t_mod, 's_p':s_p, 's_v':s_v, 's_a':s_a, 's_j':s_j},
-                     open(os.path.join(directory_save, filename), 'wb'))
+            if t_mod == 0:
+                s_p = self.list_q[0]
+            else:
+                filename = datetime.now().strftime('traj_error_%Y%m%d_%H%M%S.pkl')
+                directory_save = os.path.join(os.path.dirname(os.path.realpath(__file__)), '../results')
+                print(' traj_error. Saving pickle file ({0})'.format(filename))
+                pkl.dump({'s_funcs':s_funcs, 't':t, 't_mod':t_mod, 's_p':s_p, 's_v':s_v, 's_a':s_a, 's_j':s_j},
+                         open(os.path.join(directory_save, filename), 'wb'))
 
         return s_p, s_v, s_a, s_j
 
