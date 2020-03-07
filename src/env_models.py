@@ -204,12 +204,13 @@ class Model_Randomized(Model_Base):
     Randomized non-overlapping points of interest
     """
     def __init__(self, env_size=np.array([100,100]), N_q=10, step_size=1, B=10,
-                 b_terrain=False, b_verbose=True, b_logging=True):
+                 b_terrain=False, b_verbose=True, b_logging=True, seed=None):
         """
         Initializes an environmental model that has N_q randomly initialized points
         """
         # Sensing radius of the robotic system
         self.B = B
+        self.seed = seed
 
         super(Model_Randomized, self).__init__(env_size=env_size, N_q=N_q, step_size=step_size,
                                                b_terrain=b_terrain, b_verbose=b_verbose, b_logging=b_logging)
@@ -219,6 +220,9 @@ class Model_Randomized(Model_Base):
         Initialize the points of interest x spread across a grid in random fashion and uncertainty growth rates with a
         chi-squared distribution
         """
+        if self.seed:
+            np.random.seed(seed=self.seed)
+
         b_searching = True
         arr_q = np.zeros((self.N_q, 2))
 
@@ -253,18 +257,21 @@ class Model_Randomized(Model_Base):
                 if all(xy_valid == False):
                     break
 
-        print('Locations remaining: {0:0.2f}%'.format(100 *np.sum(xy_valid) / np.product(self.env_size)))
+        # print('Locations remaining: {0:0.2f}%'.format(100 *np.sum(xy_valid) / np.product(self.env_size)))
+        print('{0:0.2f},'.format(100 * np.sum(xy_valid) / np.product(self.env_size)))
 
         self.list_q = arr_q
 
         self.covar_env = np.diag((2*np.random.random(size=self.N_q))**2)
+
+        return
 
 ####################
 """
 Test functionality by generating and plotting an environment
 """
 if __name__ == '__main__':
-    list_N_q = [10, 20, 40, 60, 80, 100]
+    list_N_q = [10, 20, 40]
     n_iter = 3
 
     for N_q in list_N_q:
@@ -273,7 +280,7 @@ if __name__ == '__main__':
                          b_terrain=False, b_verbose=False, b_logging=False, B=10)
 
             #tempx, tempy = np.meshgrid(range(test_env.env_size[0]), range(test_env.env_size[1]))
-            plt.figure(1)
+            plt.figure(1, figsize=[3.5,3.5])
             plt.subplot(111)
             # plt.pcolor(tempx, tempy, test_env.map_terrain,
             #            cmap='Greens_r')  # Can use 'terrain' colormap once elevation is normalized
@@ -282,5 +289,7 @@ if __name__ == '__main__':
 
             test_env.visualize()
             plt.show()
+
+        print('\n\n')
 
     print(' ')
