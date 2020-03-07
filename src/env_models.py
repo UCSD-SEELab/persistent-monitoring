@@ -258,7 +258,8 @@ class Model_Randomized(Model_Base):
 
         self.list_q = arr_q
 
-        self.covar_env = np.diag((2*np.random.random(size=self.N_q))**2)
+        # self.covar_env = np.diag((2*np.random.random(size=self.N_q))**2)
+        self.covar_env = np.diag(np.random.random(size=self.N_q))
 
         return
 
