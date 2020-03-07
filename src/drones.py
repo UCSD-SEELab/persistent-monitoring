@@ -11,6 +11,7 @@ Classes for drones under test
 
 import time
 import sys
+import os
 
 import math
 import numpy as np
@@ -25,8 +26,8 @@ from functools import partial
 import matplotlib.cm as colors
 import matplotlib.pyplot as plt
 
-import sympy  # SymPy used for generating functions to solve for Ostertag Greedy KF implementation
-import pulp                 # PuLP is a linear programming optimization library
+import sympy    # SymPy used for generating functions to solve for Ostertag Greedy KF implementation
+import pulp     # PuLP is a linear programming optimization library
 from mosek.fusion import *
 import mosek
 from concorde.tsp import TSPSolver
@@ -50,15 +51,15 @@ def generate_func_kfsteadystate(depth=10):
         # time_start = time.time()
         # print('Depth {0}'.format(num_obs))
         if (num_obs > 1):
-            expr = sympy.Eq(list_lambda[0], list_lambda[num_obs-1] + (Twc - num_obs)*W - \
-                            list_lambda[num_obs-1]**2 / (list_lambda[num_obs-1] + V))
+            expr = -list_lambda[0] + list_lambda[num_obs-1] + (Twc - num_obs)*W - \
+                            list_lambda[num_obs-1]**2 / (list_lambda[num_obs-1] + V)
             for k in range(num_obs-1, 0, -1):
                 expr = expr.subs(list_lambda[k], 
                                  list_lambda[k-1] + W - list_lambda[k-1]**2 / \
                                  (list_lambda[k-1] + V))
         else:
-           expr = sympy.Eq(list_lambda[0], list_lambda[0] + (Twc - num_obs)*W - \
-                           list_lambda[0]**2 / (list_lambda[0] + V))
+           expr = -list_lambda[0] + list_lambda[0] + (Twc - num_obs)*W - \
+                           list_lambda[0]**2 / (list_lambda[0] + V)
 
         list_func.append(expr)
         # print('{0:0.3f} s'.format(time.time() - time_start))
@@ -363,9 +364,10 @@ class Drone_Base():
 
         if any(s_p != s_p):
             filename = datetime.now().strftime('traj_error_%Y%m%d_%H%M%S.pkl')
+            directory_save = os.path.join(os.path.dirname(os.path.realpath(__file__)), '../results')
             print(' traj_error. Saving pickle file ({0})'.format(filename))
             pkl.dump({'s_funcs':s_funcs, 't':t, 't_mod':t_mod, 's_p':s_p, 's_v':s_v, 's_a':s_a, 's_j':s_j},
-                     open(filename, 'wb'))
+                     open(os.path.join(directory_save, filename), 'wb'))
 
         return s_p, s_v, s_a, s_j
 

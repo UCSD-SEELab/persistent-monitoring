@@ -113,7 +113,7 @@ class Sim_Environment():
         """
         list_env_config = {'N_q': self.env_model.N_q, 'env_size': self.env_model.env_size, 'list_q':self.env_model.list_q,
                            'covar_env': self.env_model.covar_env}
-        list_drone_config = {'names':[drone.drone_id for drone in self.swarm_controller.list_drones],
+        list_drone_config = {'drones':self.swarm_controller.list_drones,
                              'vmax':param_vmax, 'amax':param_amax, 'jmax':param_jmax, 'B':param_B}
         list_results = self.swarm_controller.get_results()
 
@@ -297,8 +297,9 @@ if __name__ == '__main__':
         steps_per_sample = 10
         N_steps = N_steps * steps_per_sample
     else:
-        step_time = 1
-        steps_per_sample = 1
+        step_time = 0.1
+        steps_per_sample = 10
+        N_steps = N_steps * steps_per_sample
 
     N_tests = args.Ntests
     param_ros = 1
