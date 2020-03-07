@@ -885,6 +885,8 @@ class Drone_Smith2012(Drone_Base):
             alpha =  ((arr_beta_edges[ind_inrange] - theta_prev) / dist_dout).reshape(-1, 1) # value between 0 and 1
             arr_beta_p[ind_inrange, :] = (1 - alpha)*pos_curr + alpha*pos_next
 
+        arr_beta_p[-1, :] = arr_beta_p[0, :]        # Occasionally misses last point due to numerical issues
+
         return arr_beta_p
 
 
@@ -1314,7 +1316,7 @@ class Drone_Ostertag2019(Drone_Base):
             alpha =  ((arr_beta_edges[ind_inrange] - theta_prev) / dist_dout).reshape(-1, 1) # value between 0 and 1
             arr_beta_p[ind_inrange, :] = (1 - alpha)*pos_curr + alpha*pos_next
 
-        arr_beta_p[-1, :] = arr_beta_p[0, :]
+        arr_beta_p[-1, :] = arr_beta_p[0, :]        # Occasionally misses last point due to numerical issues
 
         return arr_beta_p
 

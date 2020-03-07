@@ -344,7 +344,7 @@ if __name__ == '__main__':
         swarm_controller.add_drone(drone_type=Drone_Constant, drone_id='Drone_Constant', b_verbose=b_verbose, b_logging=b_logging,
                                    cfg={'env_model': env_model, 'vmax':param_vmax, 'amax':param_amax, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
-        swarm_controller.add_drone(drone_type=Drone_Smith2012, drone_id='Drone_Smith2012', b_verbose=b_verbose, b_logging=b_logging,
+        swarm_controller.add_drone(drone_type=Drone_Smith2012_Regions, drone_id='Drone_Smith2012_Regions', b_verbose=b_verbose, b_logging=b_logging,
                                    cfg={'env_model': env_model, 'vmax': param_vmax, 'amax':param_amax, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
         swarm_controller.add_drone(drone_type=Drone_Ostertag2019_Regions, drone_id='Drone_Ostertag2019_Regions', b_verbose=b_verbose, b_logging=b_logging,
