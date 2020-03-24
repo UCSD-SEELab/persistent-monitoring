@@ -17,7 +17,7 @@ import math
 import logging
 import numpy as np
 import pickle as pkl
-from env_models import Model_Base, Model_Randomized
+from env_models import Model_Base, Model_Randomized, Model_Fig1
 from drones import Drone_Base, Drone_Ostertag2020, Drone_Constant, Drone_Ostertag2019, Drone_Smith2012
 from drones import Drone_Smith2012_Regions, Drone_Ostertag2019_Regions
 
@@ -334,6 +334,7 @@ if __name__ == '__main__':
         #                        b_verbose=b_verbose, b_logging=b_logging)
         env_model = Model_Randomized(env_size=env_size, step_size=step_size, N_q=param_N_q, B=param_obs_rad,
                                      b_verbose=b_verbose, b_logging=b_logging)
+        # env_model = Model_Fig1()
         sim_env.set_env_model(env_model)
 
         fs = 1 / (steps_per_sample * step_time)

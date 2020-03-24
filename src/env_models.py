@@ -264,10 +264,97 @@ class Model_Randomized(Model_Base):
         return
 
 ####################
+class Model_Fig1(Model_Base):
+    """
+    Environmental Model for the graphical abstract of the work.
+
+    A controlled set of randomized non-overlapping points of interest, with a particular configuration of points in
+    the upper left hand corner.
+    """
+    def __init__(self, env_size=np.array([200,150]), N_q=30, step_size=1, B=10,
+                 b_terrain=False, b_verbose=True, b_logging=True):
+        """
+        Initializes an environmental model that has N_q randomly initialized points
+        """
+        # Sensing radius of the robotic system
+        self.B = B
+
+        super(Model_Fig1, self).__init__(env_size=env_size, N_q=N_q, step_size=step_size,
+                                         b_terrain=b_terrain, b_verbose=b_verbose, b_logging=b_logging)
+
+    def init_pois(self):
+        """
+        Initialize the points of interest x spread across a grid in random fashion and uncertainty growth rates with a
+        chi-squared distribution
+        """
+        np.random.seed(seed=42)
+
+        b_searching = True
+        arr_q = np.zeros((self.N_q, 2))
+
+        q_def_TL = np.array([[35, 45], [15, 15], [50, 10]])
+        q_def = np.zeros(q_def_TL.shape)
+        q_def[:, 0] = q_def_TL[:, 0]
+        q_def[:, 1] = self.env_size[1] - q_def_TL[:, 1]
+
+        while (b_searching):
+            # Initialize grid of all possible points
+            x_pos = np.arange(self.B + 1, self.env_size[0] - self.B - 1)
+            y_pos = np.arange(self.B + 1, self.env_size[1] - self.B - 1)
+
+            x_mesh, y_mesh = np.meshgrid(x_pos, y_pos)
+
+            xy_ind = np.arange(len(x_pos) * len(y_pos))
+            xy_valid = np.ones(xy_ind.shape).astype(bool)
+
+            for ind_q, q in enumerate(q_def):
+                # Add to the array
+                x = q[0]
+                y = q[1]
+                arr_q[ind_q, 0], arr_q[ind_q, 1] = x, y
+
+                # Invalidate all other points within range
+                mesh_valid = np.power(x_mesh - x, 2) + np.power(y_mesh - y, 2) > (2 * self.B) ** 2
+                xy_valid = np.logical_and(xy_valid, mesh_valid.flatten())
+
+            for ind_q in range(3, self.N_q):
+                # Choose a single valid location
+                ind_point = np.random.choice(xy_ind[xy_valid])
+                x_ind = ind_point % len(x_pos)
+                y_ind = ind_point // len(x_pos)
+
+                # Add to the array
+                x = x_pos[x_ind]
+                y = y_pos[y_ind]
+                arr_q[ind_q, 0], arr_q[ind_q, 1] = x, y
+
+                # Invalidate all other points within range
+                mesh_valid = np.power(x_mesh - x, 2) + np.power(y_mesh - y, 2) > (2 * self.B)**2
+                xy_valid = np.logical_and(xy_valid, mesh_valid.flatten())
+
+                if ind_q == (self.N_q - 1):
+                    b_searching = False
+
+                if all(xy_valid == False):
+                    break
+
+        # print('Locations remaining: {0:0.2f}%'.format(100 *np.sum(xy_valid) / np.product(self.env_size)))
+        print('{0:0.2f},'.format(100 * np.sum(xy_valid) / np.product(self.env_size)))
+
+        self.list_q = arr_q
+
+        # self.covar_env = np.diag((2*np.random.random(size=self.N_q))**2)
+        self.covar_env = np.diag(0.5 * np.ones(self.N_q))
+        self.covar_env[1, 1] = 0.75
+
+        return
+
+####################
 """
 Test functionality by generating and plotting an environment
 """
 if __name__ == '__main__':
+    """
     list_N_q = [10, 20, 40]
     n_iter = 3
 
@@ -288,5 +375,13 @@ if __name__ == '__main__':
             plt.show()
 
         print('\n\n')
+    """
 
+    test_env = Model_Fig1()
+    plt.figure(1, figsize=[6, 4.5])
+    plt.subplot(111)
+    plt.title('Graphical Abstract')
+
+    test_env.visualize()
+    plt.show()
     print(' ')
