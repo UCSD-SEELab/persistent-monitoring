@@ -272,7 +272,7 @@ if __name__ == '__main__':
                         help='noise in observation model')
     parser.add_argument('--Nq', type=int, default=20,
                         help='number of points of interest (q)')
-    parser.add_argument('--Nsteps', type=int, default=200,
+    parser.add_argument('--Nsteps', type=int, default=1200,
                         help='number of simulation steps')
     parser.add_argument('--Ntests', type=int, default=10,
                         help='number of independent tests')
