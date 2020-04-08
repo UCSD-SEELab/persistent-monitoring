@@ -20,6 +20,7 @@ import pickle as pkl
 from env_models import Model_Base, Model_Randomized, Model_Fig1
 from drones import Drone_Base, Drone_Ostertag2020, Drone_Constant, Drone_Ostertag2019, Drone_Smith2012
 from drones import Drone_Smith2012_Regions, Drone_Ostertag2019_Regions
+from drone_models import Crazyflie, Phantom3
 
 import matplotlib.cm as colors
 import matplotlib.pyplot as plt
@@ -94,7 +95,7 @@ class Sim_Environment():
 
     def update(self):
         """
-        Updates the environmental model and then each robotic platform
+        Updates the environmental model and then the plan for each robotic platform
         """
         b_sample = (self.step_count % self.steps_per_sample) == 0
 
@@ -172,18 +173,18 @@ class SwarmController():
 
         self.list_drones = []
 
-    def add_drone(self, drone_type, drone_id, b_verbose=True, b_logging=True, cfg=None):
+    def add_drone(self, drone_model, planner, drone_id, b_verbose=True, b_logging=True, cfg=None):
         """
         Adds a drone specified by drone_type, which should be a drone model that conforms to the standard in drones.py.
         cfg is a dictionary that holds the configuration of the drone for all required parameters by the class.
         """
-        try:
-            temp_drone = drone_type(drone_id=drone_id, b_verbose=b_verbose, b_logging=b_logging, **cfg)
-            self.list_drones.append(temp_drone)
-            print('Drone ({0}) added to swarm_controller'.format(drone_type.__name__))
-        except:
-            print(sys.exc_info())
-            print('Drone ({0}) failed to be created with parameters {1}'.format(drone_type.__name__, cfg))
+        #try:
+        temp_drone = planner(drone_model=drone_model(), drone_id=drone_id, b_verbose=b_verbose, b_logging=b_logging, **cfg)
+        self.list_drones.append(temp_drone)
+        print('Drone ({0}) added to swarm_controller'.format(planner.__name__))
+        #except:
+        #    print(sys.exc_info())
+        #    print('Drone ({0}) failed to be created with parameters {1}'.format(planner.__name__, cfg))
 
     def init_sim(self):
         """
@@ -193,7 +194,8 @@ class SwarmController():
             drone.init_sim()
 
         self.arr_covar = np.zeros((len(self.list_drones), 0, self.env_model.N_q + 1))
-        self.arr_s = np.zeros((len(self.list_drones), 4, 2, 0))
+        self.arr_s = np.zeros((len(self.list_drones), 13, 0))
+        self.arr_s_plan = np.zeros((len(self.list_drones), 4, 3, 0))
         self.arr_b_sample = np.zeros(0).astype(bool)
 
     def update(self, dt, b_sample=True):
@@ -205,17 +207,20 @@ class SwarmController():
         else:
             temp_covar = np.zeros((len(self.list_drones), 1, self.env_model.N_q + 1))
 
-        temp_s = np.zeros((len(self.list_drones), 4, 2, 1))
+        temp_s_plan = np.zeros((len(self.list_drones), 4, 3, 1))
+        temp_s = np.zeros((len(self.list_drones), 13, 1))
 
         for ind_drone, drone in enumerate(self.list_drones):
             temp_covar[ind_drone, :, :] = drone.update(dt, b_sample=b_sample)
-            temp_s[ind_drone, 0, :, 0] = drone.s_p
-            temp_s[ind_drone, 1, :, 0] = drone.s_v
-            temp_s[ind_drone, 2, :, 0] = drone.s_a
-            temp_s[ind_drone, 3, :, 0] = drone.s_j
+            temp_s_plan[ind_drone, 0, :, 0] = drone.s_p
+            temp_s_plan[ind_drone, 1, :, 0] = drone.s_v
+            temp_s_plan[ind_drone, 2, :, 0] = drone.s_a
+            temp_s_plan[ind_drone, 3, :, 0] = drone.s_j
+            temp_s[ind_drone, :, 0] = drone.s_state
 
         self.arr_covar = np.append(self.arr_covar, temp_covar, axis=1)
-        self.arr_s = np.append(self.arr_s, temp_s, axis=3)
+        self.arr_s = np.append(self.arr_s, temp_s, axis=2)
+        self.arr_s_plan = np.append(self.arr_s_plan, temp_s_plan, axis=3)
         self.arr_b_sample = np.append(self.arr_b_sample, b_sample)
 
     def reset_covar(self):
@@ -236,7 +241,7 @@ class SwarmController():
         """
         Return results of the drone IDs and their covariance values
         """
-        return {'covar':self.arr_covar, 's':self.arr_s, 'b_samp':self.arr_b_sample}
+        return {'covar':self.arr_covar, 's_plan':self.arr_s_plan, 's_real':self.arr_s, 'b_samp':self.arr_b_sample}
 
     def reset_drones(self, theta0, covar_0_scale=100):
         """
@@ -342,25 +347,32 @@ if __name__ == '__main__':
         # Set up swarm controller and drones to test
         swarm_controller = SwarmController(env_model=env_model, b_verbose=b_verbose, b_logging=b_logging)
         sim_env.set_swarm_controller(swarm_controller)
-        swarm_controller.add_drone(drone_type=Drone_Constant, drone_id='Drone_Constant', b_verbose=b_verbose, b_logging=b_logging,
+        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Constant, drone_id='Drone_Constant',
+                                   b_verbose=b_verbose, b_logging=b_logging,
                                    cfg={'env_model': env_model, 'vmax':param_vmax, 'amax':param_amax, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
-        swarm_controller.add_drone(drone_type=Drone_Smith2012_Regions, drone_id='Drone_Smith2012_Regions', b_verbose=b_verbose, b_logging=b_logging,
+        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Smith2012_Regions,
+                                   drone_id='Drone_Smith2012_Regions', b_verbose=b_verbose, b_logging=b_logging,
                                    cfg={'env_model': env_model, 'vmax': param_vmax, 'amax':param_amax, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
-        swarm_controller.add_drone(drone_type=Drone_Ostertag2019_Regions, drone_id='Drone_Ostertag2019_Regions', b_verbose=b_verbose, b_logging=b_logging,
+        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Ostertag2019_Regions,
+                                   drone_id='Drone_Ostertag2019_Regions', b_verbose=b_verbose, b_logging=b_logging,
                                    cfg={'env_model': env_model, 'vmax':param_vmax, 'amax':param_amax, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
-        swarm_controller.add_drone(drone_type=Drone_Ostertag2020, drone_id='Drone_Ostertag2020', b_verbose=b_verbose, b_logging=b_logging,
+        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Ostertag2020,
+                                   drone_id='Drone_Ostertag2020', b_verbose=b_verbose, b_logging=b_logging,
                                    cfg={'env_model': env_model, 'vmax':param_vmax, 'amax':param_amax, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
 
-
-        # Everything is connected, initialize
         sim_env.init_sim()
+
+        arr_timechecks = np.linspace(0, N_steps, 10).astype(int)
 
         for ind in range(N_steps):
             sim_env.update()
+
+            if ind in arr_timechecks:
+                print('{0}/{1}'.format(ind, N_steps))
 
             # Update visualization
             if param_b_visualize:

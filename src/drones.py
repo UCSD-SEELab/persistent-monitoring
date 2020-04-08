@@ -15,7 +15,7 @@ import os
 
 import math
 import numpy as np
-from scipy import linalg
+from scipy import linalg, integrate
 
 # Saving out errors
 from datetime import datetime
@@ -33,6 +33,7 @@ import mosek
 from concorde.tsp import TSPSolver
 
 from utility_func import *
+from controllers import *
 
 
 ####################
@@ -101,14 +102,15 @@ def obs_window_circular(p, q, rad=10):
     of a POI or a 2d array of locations, and rad is the radius
     """
     if q.ndim == 1:
-        dist_p_q = np.sqrt(np.sum(np.power(q - p, 2)))
+        dist_p_q = np.sqrt(np.sum(np.power(q[:2] - p[:2], 2)))
     elif q.ndim == 2:
-        dist_p_q = np.sqrt(np.sum(np.power(q - p, 2), axis=1))
+        dist_p_q = np.sqrt(np.sum(np.power(q[:, :2] - p[:2], 2), axis=1))
     else:
         # ERROR
         dist_p_q = 0
 
     return dist_p_q <= rad
+
 
 ####################
 class Drone_Base():
@@ -120,10 +122,11 @@ class Drone_Base():
     DEFAULT_JMAX = 400
     DEFAULT_COVAR_OBS = 40
     DEFAULT_FS = 1
+    DEFAULT_T_INT = 0.01
 
     THETA = np.linspace(0, 2*np.pi, 40)
 
-    def __init__(self, drone_id, env_model=None, b_verbose=True, b_logging=True, **cfg):
+    def __init__(self, drone_model, drone_id, controller=controller_lee, env_model=None, b_verbose=True, b_logging=True, **cfg):
         """
         OLD PARAMS. TO BE UPDATED
         Initializing the drone requires at minimum:
@@ -144,6 +147,8 @@ class Drone_Base():
         self.b_verbose = b_verbose
         self.b_logging = b_logging
 
+        self.drone_model = drone_model  # Physical model of the drone
+        self.controller = controller
         self.drone_id = drone_id        # Unique drone ID
 
         self.drone_desc = 'Drone_Base class'
@@ -179,11 +184,17 @@ class Drone_Base():
         else:
             self.covar_obs = Drone_Base.DEFAULT_COVAR_OBS
 
+        if ('t_int' in cfg.keys()):
+            self.t_int = cfg['t_int']
+        else:
+            self.t_int = Drone_Base.DEFAULT_T_INT
+
         self.env_model = env_model
         if (self.env_model):
             self.list_q = self.env_model.get_pois()
             self.init_sensing()
             self.s_p, self.s_v, self.s_a, self.s_j = self.form_traj()
+            self.s_state = init_state(self.s_p, self.s_v, self.s_a, self.s_j, yaw=0)
             self.b_traj_ready = True
             self.t_prev = 0
         else:
@@ -456,7 +467,7 @@ class Drone_Base():
         Returns a list of observed points of interest based on the defined observation window
         """
         if (self.obs_window):
-            b_ind_obs = self.obs_window(self.s_p, self.list_q)
+            b_ind_obs = self.obs_window(self.s_state[:3], self.list_q)
         else:
             b_ind_obs = []
 
@@ -478,8 +489,18 @@ class Drone_Base():
         Then, captures an observation and updates the Kalman filter.
         """
         t = self.t_prev + dt
-        # Update current position
+
+        # Update current planned trajectory
         self.s_p, self.s_v, self.s_a, self.s_j = self.calc_traj(t)
+
+        # Calculate true position using ODEs by solving multiple segments of the ODE
+        t_eval = np.arange(self.t_prev, t, self.t_int)
+        if not(t - 0.001 < t_eval[-1] < t + 0.001):
+            t_eval = np.append(t_eval, t)
+
+        soln = integrate.solve_ivp(quadEOM, t_span=(t_eval[0], t_eval[-1]), y0=self.s_state, t_eval=t_eval,
+                                   args=(self.controller, self.calc_traj, self.drone_model))
+        self.s_state = soln.y[:, -1]
 
         # Update current prediction of estimated states, capture an observation, and update Kalman filter
         self.update_predict(dt)
@@ -565,11 +586,12 @@ class Drone_Base():
         figure
         """
         # Plot position
-        plt.scatter(self.s_p[0], self.s_p[1], color=plot_color, marker='x')
+        plt.scatter(self.s_p[0], self.s_p[1], color=plot_color, marker='o')
+        plt.scatter(self.s_state[0], self.s_state[1], color=plot_color, marker='x')
         
         # Plot sensing region
-        B_x = np.cos(Drone_Base.THETA) * self.obs_rad + self.s_p[0]
-        B_y = np.sin(Drone_Base.THETA) * self.obs_rad + self.s_p[1]
+        B_x = np.cos(Drone_Base.THETA) * self.obs_rad + self.s_state[0]
+        B_y = np.sin(Drone_Base.THETA) * self.obs_rad + self.s_state[1]
         plt.plot(B_x, B_y, color=plot_color)
     
     
@@ -588,7 +610,7 @@ class Drone_Constant(Drone_Base):
     Drone that flies at a constant speed.
     """
     
-    def __init__(self, drone_id, env_model=None, b_verbose=True, b_logging=True, **cfg):
+    def __init__(self, drone_model, drone_id, env_model=None, b_verbose=True, b_logging=True, **cfg):
         """
         Initialze a drone that flies at a constant velocity around the path
         
@@ -597,7 +619,7 @@ class Drone_Constant(Drone_Base):
         """
         self.drone_desc = 'Constant velocity drone'
 
-        super(Drone_Constant, self).__init__(drone_id=drone_id, env_model=env_model,
+        super(Drone_Constant, self).__init__(drone_model=drone_model, drone_id=drone_id, env_model=env_model,
              b_logging=b_logging, b_verbose=b_verbose, **cfg)
 
     def form_traj(self):
@@ -645,6 +667,7 @@ class Drone_Constant(Drone_Base):
                                 partial(tfunc_const, val=np.zeros(p1.shape)),
                                 {'type': 'linear', 't1': t1, 't2': t2, 'p1': p1, 'p2': p2, 'T': (t2 - t1)}])
 
+
 ####################
 class Drone_Smith2012(Drone_Base):
     """
@@ -657,7 +680,7 @@ class Drone_Smith2012(Drone_Base):
     """
     DEFAULT_J = 200
 
-    def __init__(self, drone_id, env_model=None, b_verbose=True, b_logging=True, **cfg):
+    def __init__(self, drone_model, drone_id, env_model=None, b_verbose=True, b_logging=True, **cfg):
         """
         Initialze a drone that
         """
@@ -668,7 +691,7 @@ class Drone_Smith2012(Drone_Base):
         else:
             self.J = Drone_Smith2012.DEFAULT_J
 
-        super(Drone_Smith2012, self).__init__(drone_id=drone_id, env_model=env_model,
+        super(Drone_Smith2012, self).__init__(drone_model=drone_model, drone_id=drone_id, env_model=env_model,
                                                  b_logging=b_logging, b_verbose=b_verbose,
                                                  **cfg)
 
@@ -812,8 +835,8 @@ class Drone_Smith2012(Drone_Base):
         for ind_curr in range(len(self.list_q)):
             ind_next = (ind_curr + 1) % len(self.list_q)
 
-            pos_curr = self.list_q[ind_curr]
-            pos_next = self.list_q[ind_next]
+            pos_curr = self.list_q[ind_curr, :2]
+            pos_next = self.list_q[ind_next, :2]
 
             pos_dout = pos_next - pos_curr
 
@@ -904,13 +927,13 @@ class Drone_Smith2012_Regions(Drone_Smith2012):
 
     Algorithm is modified to separate trajectory into bases that are perfectly aligned with regions of interest
     """
-    def __init__(self, drone_id, env_model=None, b_verbose=True, b_logging=True, **cfg):
+    def __init__(self, drone_model, drone_id, env_model=None, b_verbose=True, b_logging=True, **cfg):
         """
         Initialze a drone that
         """
         self.list_kf_eqs = None
 
-        super(Drone_Smith2012_Regions, self).__init__(drone_id=drone_id, env_model=env_model,
+        super(Drone_Smith2012_Regions, self).__init__(drone_model=drone_model, drone_id=drone_id, env_model=env_model,
                                               b_logging=b_logging, b_verbose=b_verbose,
                                               **cfg)
 
@@ -1118,7 +1141,7 @@ class Drone_Ostertag2019(Drone_Base):
 
     DEFAULT_J = 200
 
-    def __init__(self, drone_id, env_model=None, b_verbose=True, b_logging=True, **cfg):
+    def __init__(self, drone_model, drone_id, env_model=None, b_verbose=True, b_logging=True, **cfg):
         """
         Initialze a drone that
         """
@@ -1129,7 +1152,7 @@ class Drone_Ostertag2019(Drone_Base):
         else:
             self.J = Drone_Ostertag2019.DEFAULT_J
 
-        super(Drone_Ostertag2019, self).__init__(drone_id=drone_id, env_model=env_model,
+        super(Drone_Ostertag2019, self).__init__(drone_model=drone_model, drone_id=drone_id, env_model=env_model,
                                                  b_logging=b_logging, b_verbose=b_verbose,
                                                  **cfg)
 
@@ -1243,8 +1266,8 @@ class Drone_Ostertag2019(Drone_Base):
         for ind_curr in range(len(self.list_q)):
             ind_next = (ind_curr + 1) % len(self.list_q)
 
-            pos_curr = self.list_q[ind_curr]
-            pos_next = self.list_q[ind_next]
+            pos_curr = self.list_q[ind_curr, :2]
+            pos_next = self.list_q[ind_next, :2]
 
             pos_dout = pos_next - pos_curr
 
@@ -1343,13 +1366,13 @@ class Drone_Ostertag2019_Regions(Drone_Ostertag2019):
 
     Algorithm is modified to separate trajectory into bases that are perfectly aligned with regions of interest
     """
-    def __init__(self, drone_id, env_model=None, b_verbose=True, b_logging=True, **cfg):
+    def __init__(self, drone_model, drone_id, env_model=None, b_verbose=True, b_logging=True, **cfg):
         """
         Initialze a drone that
         """
         self.list_kf_eqs = None
 
-        super(Drone_Ostertag2019_Regions, self).__init__(drone_id=drone_id, env_model=env_model,
+        super(Drone_Ostertag2019_Regions, self).__init__(drone_model=drone_model, drone_id=drone_id, env_model=env_model,
                                               b_logging=b_logging, b_verbose=b_verbose,
                                               **cfg)
 
@@ -1506,6 +1529,7 @@ class Drone_Ostertag2019_Regions(Drone_Ostertag2019):
 
         return arr_dtheta_beta
 
+
 ####################
 class Drone_Ostertag2020(Drone_Base):
     """
@@ -1520,7 +1544,7 @@ class Drone_Ostertag2020(Drone_Base):
     """
     DEFAULT_FU = 20
 
-    def __init__(self, drone_id, env_model=None, b_verbose=True, b_logging=True, **cfg):
+    def __init__(self, drone_model, drone_id, env_model=None, b_verbose=True, b_logging=True, **cfg):
         """
         Initialze a drone that
         """
@@ -1531,7 +1555,7 @@ class Drone_Ostertag2020(Drone_Base):
         else:
             self.fu = Drone_Ostertag2020.DEFAULT_FU
 
-        super(Drone_Ostertag2020, self).__init__(drone_id=drone_id, env_model=env_model,
+        super(Drone_Ostertag2020, self).__init__(drone_model=drone_model, drone_id=drone_id, env_model=env_model,
                                                  b_logging=b_logging, b_verbose=b_verbose,
                                                  **cfg)
 
@@ -2036,17 +2060,19 @@ class Drone_Ostertag2020(Drone_Base):
 
                 theta_in = np.arctan2(-pos_din[1], -pos_din[0])
                 theta_out = np.arctan2(pos_dout[1], pos_dout[0])
-                pos_in = pos_curr + np.array([np.cos(theta_in), np.sin(theta_in)]) * self.obs_rad
-                pos_out = pos_curr + np.array([np.cos(theta_out), np.sin(theta_out)]) * self.obs_rad
+                pos_in = pos_curr + np.array([np.cos(theta_in), np.sin(theta_in), 0]) * self.obs_rad
+                pos_out = pos_curr + np.array([np.cos(theta_out), np.sin(theta_out), 0]) * self.obs_rad
 
                 v_in = self.vmax * pos_din / np.sum(pos_din ** 2) ** 0.5
                 v_out = self.vmax * pos_dout / np.sum(pos_dout ** 2) ** 0.5
                 c_p, m, dt = self.opt_bst(q_pos=pos_curr, p_in=pos_in, p_out=pos_out, v_in=v_in, v_out=v_out, T_min=T_min)
+                c_p = np.append(c_p, pos_curr[-1] * np.ones((c_p.shape[0], 1)), axis=1)
                 c_v, c_a, c_j = calc_ctrl_deriv(c_p, dt)
+
                 list_traj.append({'type':'bspline', 'c_p':c_p, 'c_v':c_v, 'c_a':c_a, 'c_j':c_j, 'm':m, 'dt':dt,
                                   'T_min':T_min, 'T':m*dt})
 
-                pos_in_next = pos_next - np.array([np.cos(theta_out), np.sin(theta_out)]) * self.obs_rad
+                pos_in_next = pos_next - np.array([np.cos(theta_out), np.sin(theta_out), 0]) * self.obs_rad
                 t_to_next = np.sum((pos_in_next - pos_out) ** 2) ** 0.5 / self.vmax
                 list_traj.append({'type':'linear', 'p1': pos_out, 'p2': pos_in_next, 'v':self.vmax, 'T':t_to_next})
 

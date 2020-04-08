@@ -75,10 +75,11 @@ class Model_Base():
         r = 35
         x = -r * np.cos(theta[:-1]).reshape((-1,1)) + self.env_size[0] / 2
         y = r * np.sin(theta[:-1]).reshape((-1,1)) + self.env_size[1] / 2
+        z = 20 * np.ones(x.size).reshape((-1,1))
 
-        self.list_q = np.append(x, y, axis=1)
+        self.list_q = np.hstack((x, y, z))
 
-        self.covar_env = np.diag(5 + 2.5*np.cos( theta[:-1] )) / 10
+        self.covar_env = np.diag(5 + 2.5*np.cos(theta[:-1])) / 10
 
     def get_map_terrain(self):
         """
@@ -220,7 +221,7 @@ class Model_Randomized(Model_Base):
             np.random.seed(seed=self.seed)
 
         b_searching = True
-        arr_q = np.zeros((self.N_q, 2))
+        arr_q = np.zeros((self.N_q, 3))
 
         while (b_searching):
             # Initialize grid of all possible points
@@ -241,7 +242,8 @@ class Model_Randomized(Model_Base):
                 # Add to the array
                 x = x_pos[x_ind]
                 y = y_pos[y_ind]
-                arr_q[ind_q, 0], arr_q[ind_q, 1] = x, y
+                z = 20
+                arr_q[ind_q, 0], arr_q[ind_q, 1], arr_q[ind_q, 2] = x, y, z
 
                 # Invalidate all other points within range
                 mesh_valid = np.power(x_mesh - x, 2) + np.power(y_mesh - y, 2) > (2 * self.B)**2
@@ -290,7 +292,7 @@ class Model_Fig1(Model_Base):
         np.random.seed(seed=42)
 
         b_searching = True
-        arr_q = np.zeros((self.N_q, 2))
+        arr_q = np.zeros((self.N_q, 3))
 
         q_def_TL = np.array([[35, 45], [15, 15], [50, 10]])
         q_def = np.zeros(q_def_TL.shape)
@@ -311,7 +313,8 @@ class Model_Fig1(Model_Base):
                 # Add to the array
                 x = q[0]
                 y = q[1]
-                arr_q[ind_q, 0], arr_q[ind_q, 1] = x, y
+                z = 20
+                arr_q[ind_q, 0], arr_q[ind_q, 1], arr_q[ind_q, 2] = x, y, z
 
                 # Invalidate all other points within range
                 mesh_valid = np.power(x_mesh - x, 2) + np.power(y_mesh - y, 2) > (2 * self.B) ** 2
