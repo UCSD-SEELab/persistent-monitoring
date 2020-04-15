@@ -127,7 +127,8 @@ class Sim_Environment():
         if not os.path.exists(directory_save):
             os.makedirs(directory_save)
         with open(os.path.join(directory_save, filename), 'wb') as fid:
-            pkl.dump({'env':list_env_config, 'drone':list_drone_config, 'results':list_results}, fid)
+            pkl.dump({'env':list_env_config, 'drone':list_drone_config, 'results':list_results,
+                      'time':{'t_step':step_time, 'step_per_sample':steps_per_sample}}, fid)
 
     def visualize(self):
         plt.clf()
@@ -366,7 +367,7 @@ if __name__ == '__main__':
 
         sim_env.init_sim()
 
-        arr_timechecks = np.linspace(0, N_steps, 10).astype(int)
+        arr_timechecks = np.linspace(0, N_steps, 10 + 1).astype(int)
 
         for ind in range(N_steps):
             sim_env.update()
@@ -379,6 +380,7 @@ if __name__ == '__main__':
                 sim_env.visualize()
                 time.sleep(0.001)
 
+        print('{0}/{1}'.format(N_steps, N_steps))
         sim_env.save_results(param_vmax=param_vmax, param_B=param_obs_rad)
 
     if (b_logging):

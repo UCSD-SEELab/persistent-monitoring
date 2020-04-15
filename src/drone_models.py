@@ -62,7 +62,7 @@ class Phantom3:
         self.grav = g
         self.arm_length = L
 
-        self.maxangle = 35 * np.pi / 180
+        self.maxangle = 60 * np.pi / 180
         self.maxF = 2.20 * m * g
         self.minF = 0.05 * m * g
 
