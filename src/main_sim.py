@@ -284,7 +284,7 @@ if __name__ == '__main__':
                         help='number of independent tests')
     parser.add_argument('--verbose', action='store_true',
                         help='enables verbose output')
-    parser.add_argument('--visual', action='store_true',
+    parser.add_argument('--visual', action='store_true', 
                         help='enables visual output')
     parser.add_argument('--logging', action='store_true',
                         help='enables debug logging')
@@ -348,21 +348,107 @@ if __name__ == '__main__':
         # Set up swarm controller and drones to test
         swarm_controller = SwarmController(env_model=env_model, b_verbose=b_verbose, b_logging=b_logging)
         sim_env.set_swarm_controller(swarm_controller)
-        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Constant, drone_id='Drone_Constant',
+        # Constant
+        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Constant, drone_id='Drone_Constant_9',
                                    b_verbose=b_verbose, b_logging=b_logging,
-                                   cfg={'env_model': env_model, 'vmax':param_vmax, 'amax':param_amax, 'jmax':param_jmax,
+                                   cfg={'env_model': env_model, 'vmax':9, 'amax':param_amax, 'jmax':param_jmax,
+                                        'fs':fs, 'obs_rad':param_obs_rad})
+        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Constant, drone_id='Drone_Constant_9_5',
+                                   b_verbose=b_verbose, b_logging=b_logging,
+                                   cfg={'env_model': env_model, 'vmax':9.5, 'amax':param_amax, 'jmax':param_jmax,
+                                        'fs':fs, 'obs_rad':param_obs_rad})
+        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Constant, drone_id='Drone_Constant_10',
+                                   b_verbose=b_verbose, b_logging=b_logging,
+                                   cfg={'env_model': env_model, 'vmax':10, 'amax':param_amax, 'jmax':param_jmax,
+                                        'fs':fs, 'obs_rad':param_obs_rad})
+        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Constant, drone_id='Drone_Constant_12',
+                                   b_verbose=b_verbose, b_logging=b_logging,
+                                   cfg={'env_model': env_model, 'vmax':12, 'amax':param_amax, 'jmax':param_jmax,
+                                        'fs':fs, 'obs_rad':param_obs_rad})
+        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Constant, drone_id='Drone_Constant_16',
+                                   b_verbose=b_verbose, b_logging=b_logging,
+                                   cfg={'env_model': env_model, 'vmax':16, 'amax':param_amax, 'jmax':param_jmax,
+                                        'fs':fs, 'obs_rad':param_obs_rad})
+
+        # Linear
+        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Smith2012_Regions,
+                                   drone_id='Drone_Smith2012_Regions_9', b_verbose=b_verbose, b_logging=b_logging,
+                                   cfg={'env_model': env_model, 'vmax': 9, 'amax':param_amax, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
         swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Smith2012_Regions,
-                                   drone_id='Drone_Smith2012_Regions', b_verbose=b_verbose, b_logging=b_logging,
-                                   cfg={'env_model': env_model, 'vmax': param_vmax, 'amax':param_amax, 'jmax':param_jmax,
+                                   drone_id='Drone_Smith2012_Regions_9_5', b_verbose=b_verbose, b_logging=b_logging,
+                                   cfg={'env_model': env_model, 'vmax': 9.5, 'amax':param_amax, 'jmax':param_jmax,
+                                        'fs':fs, 'obs_rad':param_obs_rad})
+        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Smith2012_Regions,
+                                   drone_id='Drone_Smith2012_Regions_10', b_verbose=b_verbose, b_logging=b_logging,
+                                   cfg={'env_model': env_model, 'vmax': 10, 'amax':param_amax, 'jmax':param_jmax,
+                                        'fs':fs, 'obs_rad':param_obs_rad})
+        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Smith2012_Regions,
+                                   drone_id='Drone_Smith2012_Regions_12', b_verbose=b_verbose, b_logging=b_logging,
+                                   cfg={'env_model': env_model, 'vmax': 12, 'amax':param_amax, 'jmax':param_jmax,
+                                        'fs':fs, 'obs_rad':param_obs_rad})
+        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Smith2012_Regions,
+                                   drone_id='Drone_Smith2012_Regions_16', b_verbose=b_verbose, b_logging=b_logging,
+                                   cfg={'env_model': env_model, 'vmax': 16, 'amax':param_amax, 'jmax':param_jmax,
+                                        'fs':fs, 'obs_rad':param_obs_rad})
+
+        # ACC Controller
+        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Ostertag2019_Regions,
+                                   drone_id='Drone_Ostertag2019_Regions_9', b_verbose=b_verbose, b_logging=b_logging,
+                                   cfg={'env_model': env_model, 'vmax':9, 'amax':param_amax, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
         swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Ostertag2019_Regions,
-                                   drone_id='Drone_Ostertag2019_Regions', b_verbose=b_verbose, b_logging=b_logging,
-                                   cfg={'env_model': env_model, 'vmax':param_vmax, 'amax':param_amax, 'jmax':param_jmax,
+                                   drone_id='Drone_Ostertag2019_Regions_9_5', b_verbose=b_verbose, b_logging=b_logging,
+                                   cfg={'env_model': env_model, 'vmax':9.5, 'amax':param_amax, 'jmax':param_jmax,
+                                        'fs':fs, 'obs_rad':param_obs_rad})
+        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Ostertag2019_Regions,
+                                   drone_id='Drone_Ostertag2019_Regions_10', b_verbose=b_verbose, b_logging=b_logging,
+                                   cfg={'env_model': env_model, 'vmax':10, 'amax':param_amax, 'jmax':param_jmax,
+                                        'fs':fs, 'obs_rad':param_obs_rad})
+        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Ostertag2019_Regions,
+                                   drone_id='Drone_Ostertag2019_Regions_12', b_verbose=b_verbose, b_logging=b_logging,
+                                   cfg={'env_model': env_model, 'vmax':12, 'amax':param_amax, 'jmax':param_jmax,
+                                        'fs':fs, 'obs_rad':param_obs_rad})
+        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Ostertag2019_Regions,
+                                   drone_id='Drone_Ostertag2019_Regions_16', b_verbose=b_verbose, b_logging=b_logging,
+                                   cfg={'env_model': env_model, 'vmax':16, 'amax':param_amax, 'jmax':param_jmax,
+                                        'fs':fs, 'obs_rad':param_obs_rad})
+        # New Controllers
+        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Ostertag2020,
+                                   drone_id='Drone_Ostertag2020_16_80pct', b_verbose=b_verbose, b_logging=b_logging,
+                                   cfg={'env_model': env_model, 'vmax':16, 'amax':15.4, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
         swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Ostertag2020,
-                                   drone_id='Drone_Ostertag2020', b_verbose=b_verbose, b_logging=b_logging,
-                                   cfg={'env_model': env_model, 'vmax':param_vmax, 'amax':param_amax, 'jmax':param_jmax,
+                                   drone_id='Drone_Ostertag2020_16_85pct', b_verbose=b_verbose, b_logging=b_logging,
+                                   cfg={'env_model': env_model, 'vmax':16, 'amax':16.3, 'jmax':param_jmax,
+                                        'fs':fs, 'obs_rad':param_obs_rad})
+        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Ostertag2020,
+                                   drone_id='Drone_Ostertag2020_20_85pct', b_verbose=b_verbose, b_logging=b_logging,
+                                   cfg={'env_model': env_model, 'vmax':20, 'amax':16.3, 'jmax':param_jmax,
+                                        'fs':fs, 'obs_rad':param_obs_rad})
+        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Ostertag2020,
+                                   drone_id='Drone_Ostertag2020_20_90pct', b_verbose=b_verbose, b_logging=b_logging,
+                                   cfg={'env_model': env_model, 'vmax':16, 'amax':17.3, 'jmax':param_jmax,
+                                        'fs':fs, 'obs_rad':param_obs_rad})
+        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Ostertag2020,
+                                   drone_id='Drone_Ostertag2020_20_90pct', b_verbose=b_verbose, b_logging=b_logging,
+                                   cfg={'env_model': env_model, 'vmax':20, 'amax':17.3, 'jmax':param_jmax,
+                                        'fs':fs, 'obs_rad':param_obs_rad})
+        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Ostertag2020,
+                                   drone_id='Drone_Ostertag2020_20_95pct', b_verbose=b_verbose, b_logging=b_logging,
+                                   cfg={'env_model': env_model, 'vmax':16, 'amax':18.2, 'jmax':param_jmax,
+                                        'fs':fs, 'obs_rad':param_obs_rad})
+        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Ostertag2020,
+                                   drone_id='Drone_Ostertag2020_20_95pct', b_verbose=b_verbose, b_logging=b_logging,
+                                   cfg={'env_model': env_model, 'vmax':20, 'amax':18.2, 'jmax':param_jmax,
+                                        'fs':fs, 'obs_rad':param_obs_rad})
+        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Ostertag2020,
+                                   drone_id='Drone_Ostertag2020_16_100pct', b_verbose=b_verbose, b_logging=b_logging,
+                                   cfg={'env_model': env_model, 'vmax':16, 'amax':19.2, 'jmax':param_jmax,
+                                        'fs':fs, 'obs_rad':param_obs_rad})
+        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Ostertag2020,
+                                   drone_id='Drone_Ostertag2020_20_100pct', b_verbose=b_verbose, b_logging=b_logging,
+                                   cfg={'env_model': env_model, 'vmax':20, 'amax':19.2, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
 
         sim_env.init_sim()
