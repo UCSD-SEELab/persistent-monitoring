@@ -114,8 +114,7 @@ class Sim_Environment():
         """
         list_env_config = {'N_q': self.env_model.N_q, 'env_size': self.env_model.env_size, 'list_q':self.env_model.list_q,
                            'covar_env': self.env_model.covar_env}
-        list_drone_config = {'drones':self.swarm_controller.list_drones,
-                             'vmax':param_vmax, 'amax':param_amax, 'jmax':param_jmax, 'B':param_B}
+        list_drone_config = {'drones':self.swarm_controller.get_simplified_drones(), 'B':param_B}
         list_results = self.swarm_controller.get_results()
 
         np.set_printoptions(linewidth=1024, suppress=True)
@@ -243,6 +242,45 @@ class SwarmController():
         Return results of the drone IDs and their covariance values
         """
         return {'covar':self.arr_covar, 's_plan':self.arr_s_plan, 's_real':self.arr_s, 'b_samp':self.arr_b_sample}
+
+    def get_simplified_drones(self):
+        """
+        Return list of parameters extracted from drones. Parameters are:
+            drone.__name__
+            drone.vmax
+            drone.amax
+            drone.jmax
+            drone.covar_bound
+            drone.drone_model
+            drone.fs
+            drone.fu
+            drone.covar_obs
+            drone.obs_rad
+        """
+        list_drone_simp = []
+        for drone in self.list_drones:
+            # Parameters common to all drones
+            temp_dict = {'__name__': drone.__name__,
+                         'vmax': drone.vmax,
+                         'amax': drone.amax,
+                         'jmax': drone.jmax,
+                         'covar_bound': drone.covar_bound,
+                         'controller': drone.controller.__name__,
+                         'drone_model': drone.drone_model,
+                         'fs': drone.fs,
+                         'covar_obs': drone.covar_obs,
+                         'obs_rad': drone.obs_rad}
+
+            # Parameter only for B-spline-based planners
+            if hasattr(drone, 'fu'):
+                temp_dict['fu'] = drone.fu
+            # Parameter only for segmenting path controllers
+            if hasattr(drone, 'J'):
+                temp_dict['J'] = drone.J
+
+            list_drone_simp.add(temp_dict)
+
+        return list_drone_simp
 
     def reset_drones(self, theta0, covar_0_scale=100):
         """
