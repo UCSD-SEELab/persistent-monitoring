@@ -937,7 +937,8 @@ class Drone_Smith2012_Regions(Drone_Smith2012):
                                               b_logging=b_logging, b_verbose=b_verbose,
                                               **cfg)
 
-        self.drone_desc = 'Drone with stability margin maximizing, position-dependent controller from Smith (2012)'
+        self.drone_desc = 'Drone with stability margin maximizing, position-dependent controller from Smith (2012) ' +\
+                          'with segmentation based on sensing regions'
 
     def form_traj(self):
         """
@@ -1156,7 +1157,7 @@ class Drone_Ostertag2019(Drone_Base):
                                                  b_logging=b_logging, b_verbose=b_verbose,
                                                  **cfg)
 
-        self.drone_desc = 'Drone with minimum-time robust velocity controller'
+        self.drone_desc = 'Drone with minimum-time robust velocity controller from Ostertag (2019)'
 
     def form_traj(self):
         """
@@ -1376,7 +1377,8 @@ class Drone_Ostertag2019_Regions(Drone_Ostertag2019):
                                               b_logging=b_logging, b_verbose=b_verbose,
                                               **cfg)
 
-        self.drone_desc = 'Drone with stability margin maximizing, position-dependent controller from Smith (2012)'
+        self.drone_desc = 'Drone with minimum-time robust velocity controller from Ostertag (2019) with segmentation' +\
+                          ' based on sensing regions'
 
     def form_traj(self):
         """
