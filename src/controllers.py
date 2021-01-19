@@ -94,7 +94,7 @@ def quadEOM(t, s, controlhandle, trajhandle, model_drone):
     QUADEOM Wrapper function for solving quadrotor equation of motion
     quadEOM takes in time, state vector, controller, trajectory generator
     and parameters and output the derivative of the state vector, the
-    actual calcution is done in quadEOM_readonly.
+    actual calculation is done in quadEOM_readonly.
 
     INPUTS:
     t             - 1 x 1, time
@@ -106,9 +106,6 @@ def quadEOM(t, s, controlhandle, trajhandle, model_drone):
 
     OUTPUTS:
     sdot          - 13 x 1, derivative of state vector s
-
-    NOTE: You should not modify this function
-    See Also: quadEOM_readonly, crazyflie
     """
     
     # convert state to quad stuct for control
@@ -312,13 +309,19 @@ def controller_lee(qd, t, model_drone):
     r_acc_des = qd.acc_des - k_di * e_vel - k_pi * e_pos
     r_acc_total = r_acc_des + np.array([0, 0, 1]) * model_drone.grav
 
+    r_acc_mag = np.sqrt(np.sum(r_acc_total**2))
+    r_acc_xymag = np.sqrt(np.sum(r_acc_total[:2]**2))
+
+    # If drone is falling, emergency recover by limiting XY movement and raising Z
+    if e_pos[-1] < -5:
+        r_acc_total[:2] *= model_drone.maxXYaccel / r_acc_xymag
+
     # Limit max tilt angle
-    tiltangle = np.arccos(r_acc_total[2] / np.sqrt(np.sum(r_acc_total**2)))
+    tiltangle = np.arccos(r_acc_total[2] / r_acc_mag)
     scale_acc = 1
     if tiltangle > model_drone.maxangle:
-        xy_mag = np.sqrt(np.sum(r_acc_total[:2]**2))
         xy_mag_max = r_acc_total[2] * np.tan(model_drone.maxangle)
-        scale_acc = xy_mag_max / xy_mag
+        scale_acc = xy_mag_max / r_acc_xymag
         r_acc_total[:2] = r_acc_total[:2] * scale_acc
 
     # Compute desired rotations
@@ -331,7 +334,7 @@ def controller_lee(qd, t, model_drone):
     b1_des /= np.sqrt(np.sum(b1_des**2))
 
     f_dot = model_drone.mass * scale_acc * k_pi * (-e_vel) # + qd.jrk_des
-    f_mag = model_drone.mass * np.sqrt(np.sum(r_acc_total**2))
+    f_mag = model_drone.mass * r_acc_mag
     b3_dot = np.cross(np.cross(b3_des, f_dot / f_mag), b3_des)
     a_psi_dot = np.array([-np.cos(qd.yaw_des) * qd.yawdot_des, -np.sin(qd.yaw_des) * qd.yawdot_des, 0])
     b1_dot = np.cross(np.cross(b1_des, (np.cross(a_psi_dot, b3_des) + np.cross(a_psi, b3_dot)) / np.sqrt(np.sum(np.cross(a_psi, b3_des)**2))), b1_des)
@@ -365,5 +368,7 @@ def controller_lee(qd, t, model_drone):
     # Output trpy and drpy as in hardware
     trpy = np.array([F, euler_des[0], euler_des[1], euler_des[2]])
     drpy = np.array([0, 0, 0, 0])
+
+    # print("F: {0}  XY: {1}".format(F, r_acc_xymag))
 
     return F, M, trpy, drpy
