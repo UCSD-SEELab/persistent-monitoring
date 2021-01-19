@@ -20,7 +20,7 @@ import pickle as pkl
 from env_models import Model_Base, Model_Randomized, Model_Fig1
 from drones import Drone_Base, Drone_Ostertag2020, Drone_Constant, Drone_Ostertag2019, Drone_Smith2012
 from drones import Drone_Smith2012_Regions, Drone_Ostertag2019_Regions
-from drone_models import Crazyflie, Phantom3
+from drone_models import Crazyflie, Phantom3, Phantom3_vel
 
 import matplotlib.cm as colors
 import matplotlib.pyplot as plt
@@ -81,7 +81,7 @@ class Sim_Environment():
         if (self.b_swarm_controller):
             self.swarm_controller.set_env_model( self.env_model )
 
-    def init_sim(self):
+    def init_sim(self, num_steps, steps_per_sample):
         """
         Initializes the simulation
         """
@@ -89,7 +89,7 @@ class Sim_Environment():
             self.env_model.init_sim()
 
         if (self.swarm_controller):
-            self.swarm_controller.init_sim()
+            self.swarm_controller.init_sim(num_steps, steps_per_sample)
 
         self.step_count = 0
 
@@ -114,7 +114,7 @@ class Sim_Environment():
         """
         list_env_config = {'N_q': self.env_model.N_q, 'env_size': self.env_model.env_size, 'list_q':self.env_model.list_q,
                            'covar_env': self.env_model.covar_env}
-        list_drone_config = {'drones':self.swarm_controller.get_simplified_drones(), 'B':param_B}
+        list_drone_config = {'drones':self.swarm_controller.list_drones, 'B':param_B}
         list_results = self.swarm_controller.get_results()
 
         np.set_printoptions(linewidth=1024, suppress=True)
@@ -186,17 +186,20 @@ class SwarmController():
         #    print(sys.exc_info())
         #    print('Drone ({0}) failed to be created with parameters {1}'.format(planner.__name__, cfg))
 
-    def init_sim(self):
+    def init_sim(self, num_steps, steps_per_sample):
         """
         Initialize each drone for simulation that is about to start
         """
         for drone in self.list_drones:
             drone.init_sim()
 
-        self.arr_covar = np.zeros((len(self.list_drones), 0, self.env_model.N_q + 1))
-        self.arr_s = np.zeros((len(self.list_drones), 13, 0))
-        self.arr_s_plan = np.zeros((len(self.list_drones), 4, 3, 0))
-        self.arr_b_sample = np.zeros(0).astype(bool)
+        self.arr_covar = np.zeros((len(self.list_drones), num_steps * (steps_per_sample + 1), self.env_model.N_q + 1))
+        self.arr_s = np.zeros((len(self.list_drones), 13, num_steps* steps_per_sample))
+        self.arr_s_plan = np.zeros((len(self.list_drones), 4, 3, num_steps * steps_per_sample))
+        self.arr_b_sample = np.zeros(num_steps * steps_per_sample).astype(bool)
+
+        self.ind_arr = 0
+        self.ind_arr_covar = 0
 
     def update(self, dt, b_sample=True):
         """
@@ -204,8 +207,12 @@ class SwarmController():
         """
         if b_sample:
             temp_covar = np.zeros((len(self.list_drones), 2, self.env_model.N_q + 1))
+            self.arr_covar[:, self.ind_arr_covar:self.ind_arr_covar + 2, :] = temp_covar
+            self.ind_arr_covar += 2
         else:
             temp_covar = np.zeros((len(self.list_drones), 1, self.env_model.N_q + 1))
+            self.arr_covar[:, self.ind_arr_covar:self.ind_arr_covar + 1, :] = temp_covar
+            self.ind_arr_covar += 1
 
         temp_s_plan = np.zeros((len(self.list_drones), 4, 3, 1))
         temp_s = np.zeros((len(self.list_drones), 13, 1))
@@ -218,10 +225,10 @@ class SwarmController():
             temp_s_plan[ind_drone, 3, :, 0] = drone.s_j
             temp_s[ind_drone, :, 0] = drone.s_state
 
-        self.arr_covar = np.append(self.arr_covar, temp_covar, axis=1)
-        self.arr_s = np.append(self.arr_s, temp_s, axis=2)
-        self.arr_s_plan = np.append(self.arr_s_plan, temp_s_plan, axis=3)
-        self.arr_b_sample = np.append(self.arr_b_sample, b_sample)
+        self.arr_s[:, :, self.ind_arr:self.ind_arr + 1] = temp_s
+        self.arr_s_plan[:, :, :, self.ind_arr:self.ind_arr + 1] = temp_s_plan
+        self.arr_b_sample[self.ind_arr] = b_sample
+        self.ind_arr += 1
 
     def reset_covar(self):
         """
@@ -260,11 +267,11 @@ class SwarmController():
         list_drone_simp = []
         for drone in self.list_drones:
             # Parameters common to all drones
-            temp_dict = {'__name__': drone.__name__,
+            temp_dict = {'class': drone, #type(drone).__name__,
                          'vmax': drone.vmax,
                          'amax': drone.amax,
                          'jmax': drone.jmax,
-                         'covar_bound': drone.covar_bound,
+                         'covar_bound': drone.get_optimalbound(),
                          'controller': drone.controller.__name__,
                          'drone_model': drone.drone_model,
                          'fs': drone.fs,
@@ -278,7 +285,7 @@ class SwarmController():
             if hasattr(drone, 'J'):
                 temp_dict['J'] = drone.J
 
-            list_drone_simp.add(temp_dict)
+            list_drone_simp.append(temp_dict)
 
         return list_drone_simp
 
@@ -387,79 +394,79 @@ if __name__ == '__main__':
         swarm_controller = SwarmController(env_model=env_model, b_verbose=b_verbose, b_logging=b_logging)
         sim_env.set_swarm_controller(swarm_controller)
         # Constant
-        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Constant, drone_id='Drone_Constant_9',
+        swarm_controller.add_drone(drone_model=Phantom3_vel, planner=Drone_Constant, drone_id='Drone_Constant_9',
                                    b_verbose=b_verbose, b_logging=b_logging,
                                    cfg={'env_model': env_model, 'vmax':9, 'amax':param_amax, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
-        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Constant, drone_id='Drone_Constant_10',
+        swarm_controller.add_drone(drone_model=Phantom3_vel, planner=Drone_Constant, drone_id='Drone_Constant_10',
                                    b_verbose=b_verbose, b_logging=b_logging,
                                    cfg={'env_model': env_model, 'vmax':10, 'amax':param_amax, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
-        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Constant, drone_id='Drone_Constant_12',
+        swarm_controller.add_drone(drone_model=Phantom3_vel, planner=Drone_Constant, drone_id='Drone_Constant_12',
                                    b_verbose=b_verbose, b_logging=b_logging,
                                    cfg={'env_model': env_model, 'vmax':12, 'amax':param_amax, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
-        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Constant, drone_id='Drone_Constant_14',
+        swarm_controller.add_drone(drone_model=Phantom3_vel, planner=Drone_Constant, drone_id='Drone_Constant_14',
                                    b_verbose=b_verbose, b_logging=b_logging,
                                    cfg={'env_model': env_model, 'vmax':14, 'amax':param_amax, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
-        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Constant, drone_id='Drone_Constant_16',
+        swarm_controller.add_drone(drone_model=Phantom3_vel, planner=Drone_Constant, drone_id='Drone_Constant_16',
                                    b_verbose=b_verbose, b_logging=b_logging,
                                    cfg={'env_model': env_model, 'vmax':16, 'amax':param_amax, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
-        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Constant, drone_id='Drone_Constant_16',
+        swarm_controller.add_drone(drone_model=Phantom3_vel, planner=Drone_Constant, drone_id='Drone_Constant_16',
                                    b_verbose=b_verbose, b_logging=b_logging,
                                    cfg={'env_model': env_model, 'vmax':18, 'amax':param_amax, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
 
         # Linear
-        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Smith2012_Regions,
+        swarm_controller.add_drone(drone_model=Phantom3_vel, planner=Drone_Smith2012_Regions,
                                    drone_id='Drone_Smith2012_Regions_9', b_verbose=b_verbose, b_logging=b_logging,
                                    cfg={'env_model': env_model, 'vmax': 9, 'amax':param_amax, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
-        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Smith2012_Regions,
+        swarm_controller.add_drone(drone_model=Phantom3_vel, planner=Drone_Smith2012_Regions,
                                    drone_id='Drone_Smith2012_Regions_10', b_verbose=b_verbose, b_logging=b_logging,
                                    cfg={'env_model': env_model, 'vmax': 10, 'amax':param_amax, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
-        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Smith2012_Regions,
+        swarm_controller.add_drone(drone_model=Phantom3_vel, planner=Drone_Smith2012_Regions,
                                    drone_id='Drone_Smith2012_Regions_12', b_verbose=b_verbose, b_logging=b_logging,
                                    cfg={'env_model': env_model, 'vmax': 12, 'amax':param_amax, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
-        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Smith2012_Regions,
+        swarm_controller.add_drone(drone_model=Phantom3_vel, planner=Drone_Smith2012_Regions,
                                    drone_id='Drone_Smith2012_Regions_14', b_verbose=b_verbose, b_logging=b_logging,
                                    cfg={'env_model': env_model, 'vmax': 14, 'amax':param_amax, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
-        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Smith2012_Regions,
+        swarm_controller.add_drone(drone_model=Phantom3_vel, planner=Drone_Smith2012_Regions,
                                    drone_id='Drone_Smith2012_Regions_16', b_verbose=b_verbose, b_logging=b_logging,
                                    cfg={'env_model': env_model, 'vmax': 16, 'amax':param_amax, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
-        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Smith2012_Regions,
+        swarm_controller.add_drone(drone_model=Phantom3_vel, planner=Drone_Smith2012_Regions,
                                    drone_id='Drone_Smith2012_Regions_18', b_verbose=b_verbose, b_logging=b_logging,
                                    cfg={'env_model': env_model, 'vmax': 18, 'amax':param_amax, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
 
         # ACC Controller
-        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Ostertag2019_Regions,
+        swarm_controller.add_drone(drone_model=Phantom3_vel, planner=Drone_Ostertag2019_Regions,
                                    drone_id='Drone_Ostertag2019_Regions_9', b_verbose=b_verbose, b_logging=b_logging,
                                    cfg={'env_model': env_model, 'vmax':9, 'amax':param_amax, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
-        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Ostertag2019_Regions,
+        swarm_controller.add_drone(drone_model=Phantom3_vel, planner=Drone_Ostertag2019_Regions,
                                    drone_id='Drone_Ostertag2019_Regions_10', b_verbose=b_verbose, b_logging=b_logging,
                                    cfg={'env_model': env_model, 'vmax':10, 'amax':param_amax, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
-        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Ostertag2019_Regions,
+        swarm_controller.add_drone(drone_model=Phantom3_vel, planner=Drone_Ostertag2019_Regions,
                                    drone_id='Drone_Ostertag2019_Regions_12', b_verbose=b_verbose, b_logging=b_logging,
                                    cfg={'env_model': env_model, 'vmax':12, 'amax':param_amax, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
-        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Ostertag2019_Regions,
+        swarm_controller.add_drone(drone_model=Phantom3_vel, planner=Drone_Ostertag2019_Regions,
                                    drone_id='Drone_Ostertag2019_Regions_14', b_verbose=b_verbose, b_logging=b_logging,
                                    cfg={'env_model': env_model, 'vmax':14, 'amax':param_amax, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
-        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Ostertag2019_Regions,
+        swarm_controller.add_drone(drone_model=Phantom3_vel, planner=Drone_Ostertag2019_Regions,
                                    drone_id='Drone_Ostertag2019_Regions_16', b_verbose=b_verbose, b_logging=b_logging,
                                    cfg={'env_model': env_model, 'vmax':16, 'amax':param_amax, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
-        swarm_controller.add_drone(drone_model=Phantom3, planner=Drone_Ostertag2019_Regions,
+        swarm_controller.add_drone(drone_model=Phantom3_vel, planner=Drone_Ostertag2019_Regions,
                                    drone_id='Drone_Ostertag2019_Regions_18', b_verbose=b_verbose, b_logging=b_logging,
                                    cfg={'env_model': env_model, 'vmax':18, 'amax':param_amax, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
@@ -549,8 +556,7 @@ if __name__ == '__main__':
                                    cfg={'env_model': env_model, 'vmax':20, 'amax':19.2, 'jmax':param_jmax,
                                         'fs':fs, 'obs_rad':param_obs_rad})
 
-
-        sim_env.init_sim()
+        sim_env.init_sim(num_steps=N_steps, steps_per_sample=steps_per_sample)
 
         arr_timechecks = np.linspace(0, N_steps, 10 + 1).astype(int)
 
