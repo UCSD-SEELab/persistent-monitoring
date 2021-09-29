@@ -193,10 +193,11 @@ class SwarmController():
         for drone in self.list_drones:
             drone.init_sim()
 
-        self.arr_covar = np.zeros((len(self.list_drones), num_steps * (steps_per_sample + 1), self.env_model.N_q + 1))
-        self.arr_s = np.zeros((len(self.list_drones), 13, num_steps* steps_per_sample))
-        self.arr_s_plan = np.zeros((len(self.list_drones), 4, 3, num_steps * steps_per_sample))
-        self.arr_b_sample = np.zeros(num_steps * steps_per_sample).astype(bool)
+        # Scale to include the sampling instances
+        self.arr_covar = np.zeros((len(self.list_drones), int(num_steps * (steps_per_sample + 1) / steps_per_sample), self.env_model.N_q + 1))
+        self.arr_s = np.zeros((len(self.list_drones), 13, num_steps))
+        self.arr_s_plan = np.zeros((len(self.list_drones), 4, 3, num_steps ))
+        self.arr_b_sample = np.zeros(num_steps).astype(bool)
 
         self.ind_arr = 0
         self.ind_arr_covar = 0
@@ -205,15 +206,13 @@ class SwarmController():
         """
         description
         """
-        if b_sample:
-            temp_covar = np.zeros((len(self.list_drones), 2, self.env_model.N_q + 1))
-            self.arr_covar[:, self.ind_arr_covar:self.ind_arr_covar + 2, :] = temp_covar
-            self.ind_arr_covar += 2
-        else:
-            temp_covar = np.zeros((len(self.list_drones), 1, self.env_model.N_q + 1))
-            self.arr_covar[:, self.ind_arr_covar:self.ind_arr_covar + 1, :] = temp_covar
-            self.ind_arr_covar += 1
 
+        if b_sample:
+            step_covar = 2
+        else:
+            step_covar = 1
+
+        temp_covar = np.zeros((len(self.list_drones), step_covar, self.env_model.N_q + 1))
         temp_s_plan = np.zeros((len(self.list_drones), 4, 3, 1))
         temp_s = np.zeros((len(self.list_drones), 13, 1))
 
@@ -224,6 +223,9 @@ class SwarmController():
             temp_s_plan[ind_drone, 2, :, 0] = drone.s_a
             temp_s_plan[ind_drone, 3, :, 0] = drone.s_j
             temp_s[ind_drone, :, 0] = drone.s_state
+
+        self.arr_covar[:, self.ind_arr_covar:self.ind_arr_covar + step_covar, :] = temp_covar
+        self.ind_arr_covar += step_covar
 
         self.arr_s[:, :, self.ind_arr:self.ind_arr + 1] = temp_s
         self.arr_s_plan[:, :, :, self.ind_arr:self.ind_arr + 1] = temp_s_plan

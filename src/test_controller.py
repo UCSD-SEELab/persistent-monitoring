@@ -8,7 +8,8 @@ from utility_func import *
 from controllers import *
 from drone_models import Crazyflie, Phantom3, Phantom3_vel
 
-filename_target = '/home/mostertag/Workbench/Drone/opt-trajectory/results/20200422/Nq80/20200422_023616_Nq80_vmax15.0_amax10.0_B10.0.pkl'
+filename_1 = '/home/mostertag/Workbench/Drone/opt-trajectory/results/20200528/20200528_223357_Nq80_vmax15.0_amax10.0_B10.0.pkl'
+filename_2 = '/home/mostertag/Workbench/Drone/opt-trajectory/results/20210119/20210119_200931_Nq80_vmax15.0_amax10.0_B10.0.pkl'
 ind_error = [21, 23] #list(range(24)) #[2, 4, 7, 9, 12, 14, 20, 21, 23] # smaller subset where Drone issues on [4, 9, 14, 21, 23]
 
 def reset_drone(drone):
@@ -74,8 +75,11 @@ if __name__ == '__main__':
 
     num_step = np.ceil(t_max / dt).astype(np.int64)
 
-    with open(filename_target, 'rb') as fid:
+    with open(filename_1, 'rb') as fid:
         data_in = pkl.load(fid)
+
+    with open(filename_2, 'rb') as fid:
+        data_in2 = pkl.load(fid)
 
     drone_test = data_in['drone']['drones'][20]
     reset_drone(drone_test)

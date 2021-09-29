@@ -34,6 +34,7 @@ from concorde.tsp import TSPSolver
 
 from utility_func import *
 from controllers import *
+from utils_sim import *
 
 
 ####################
@@ -501,6 +502,36 @@ class Drone_Base():
         soln = integrate.solve_ivp(quadEOM, t_span=(t_eval[0], t_eval[-1]), y0=self.s_state, t_eval=t_eval,
                                    args=(self.controller, self.calc_traj, self.drone_model))
         self.s_state = soln.y[:, -1]
+
+        # Update current prediction of estimated states, capture an observation, and update Kalman filter
+        self.update_predict(dt)
+        temp_covar = np.append(t, np.diag(self.get_covar_s())).reshape(1, -1)
+
+        if b_sample:
+            self.capture_data()
+            self.update_kalman()
+            temp_covar = np.append(temp_covar, np.append(t, np.diag(self.get_covar_s())).reshape(1, -1), axis=0)
+
+        # Log information
+        self.log_iter()
+
+        self.t_prev = t
+
+        return temp_covar
+
+    def update_covar_given_s_real(self, s_plan, s_real, dt, b_sample=True):
+        """
+        Moves the drone based on the velocity calculated by calc_movement().
+        Then, captures an observation and updates the Kalman filter.
+        """
+        t = self.t_prev + dt
+
+        self.s_p = s_plan[0, :]
+        self.s_v = s_plan[1, :]
+        self.s_a = s_plan[2, :]
+        self.s_j = s_plan[3, :]
+
+        self.s_state = s_real
 
         # Update current prediction of estimated states, capture an observation, and update Kalman filter
         self.update_predict(dt)
@@ -2098,10 +2129,13 @@ class Drone_Ostertag2020(Drone_Base):
             return
 
         list_q = self.env_model.get_pois()
-        q_trans = self.calc_tsp_order(list_q)
+        if len(list_q) > 3:
+            q_trans = self.calc_tsp_order(list_q)
+            self.list_q = q_trans @ list_q
+            self.covar_e = q_trans @ self.covar_e @ q_trans.T
+        else:
+            self.list_q = list_q
 
-        self.list_q = q_trans @ list_q
-        self.covar_e = q_trans @ self.covar_e @ q_trans.T
 
         # Initial trajectory calculation for d_i = 1 for all i to seed the Greedy Knockdown Algorithm
         self.list_traj = self.calc_control_points(np.ones(self.N_q) / self.fs)

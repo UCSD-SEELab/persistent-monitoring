@@ -353,6 +353,47 @@ class Model_Fig1(Model_Base):
         return
 
 ####################
+class Model_Fig2(Model_Base):
+    """
+    Environmental Model for the explanation of covariance evolution
+
+    A controlled set of three POIs
+    """
+    def __init__(self, env_size=np.array([200,150]), N_q=3, step_size=1, B=10,
+                 b_terrain=False, b_verbose=True, b_logging=True):
+        """
+        Initializes an environmental model that has N_q randomly initialized points
+        """
+        # Sensing radius of the robotic system
+        self.B = B
+
+        super(Model_Fig2, self).__init__(env_size=env_size, N_q=N_q, step_size=step_size,
+                                         b_terrain=b_terrain, b_verbose=b_verbose, b_logging=b_logging)
+
+    def init_pois(self):
+        """
+        Initialize 3 points of interest at specific locations for illustrating covariance evolution
+        """
+        np.random.seed(seed=42)
+
+        q1 = np.array([100, 100, 0])
+        q2 = q1 + [30, 0, 0]
+        q3 = q1 + [24.25, -9.377, 0]
+        arr_q = np.vstack((q1, q2, q3)) * 2.5
+
+        q_def_TL = np.array([[35, 45], [15, 15], [50, 10]])
+        q_def = np.zeros(q_def_TL.shape)
+        q_def[:, 0] = q_def_TL[:, 0]
+        q_def[:, 1] = self.env_size[1] - q_def_TL[:, 1]
+
+        self.list_q = arr_q
+
+        # self.covar_env = np.diag((2*np.random.random(size=self.N_q))**2)
+        self.covar_env = np.array([[0.165, 0, 0], [0, 0.15, 0], [0, 0, 0.07]])
+
+        return
+
+####################
 """
 Test functionality by generating and plotting an environment
 """
